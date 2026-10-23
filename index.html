@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Little Buttercup</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #fff;
@@ -65,7 +65,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import GUI from 'lil-gui';
 
 const V3 = THREE.Vector3, TAU = Math.PI * 2, UP = new V3(0, 1, 0);
-const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const clamp01 = (x) => Math.min(1, Math.max(0, x)), clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const lerp = THREE.MathUtils.lerp;
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 
@@ -1610,13 +1610,26 @@ function updateCritters(dt, t) {
   for (const b of critters) b.update(dt, t);
   for (let i = critters.length - 1; i >= 0; i--) if (critters[i].dead) critters.splice(i, 1);
 }
-function pickCritter(e) {
+function pickCritter(e, near = false) {
   ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   const hits = raycaster.intersectObjects(critters.filter((b) => !b.leaving && b.group.visible).map((b) => b.group), true);
   let o = hits[0]?.object;
   while (o && !o.userData.critter) o = o.parent;
-  return o?.userData.critter ?? null;
+  return o?.userData.critter ?? (near ? nearOnScreen(critters.filter((b) => !b.leaving && b.group.visible), e) : null);
+}
+// fingertips are big and critters are small: on touch, a tap this many pixels from one still reaches it
+const TOUCH_REACH = 28;
+const _ns = new V3(), _nb = new THREE.Box3();
+function nearOnScreen(list, e) {
+  let best = null, bd = TOUCH_REACH;
+  for (const c of list) {
+    _nb.setFromObject(c.group).getCenter(_ns).project(camera);   // (some keep their parts in world space, so not the group's own position)
+    if (_ns.z > 1) continue;   // behind the camera
+    const d = Math.hypot((_ns.x + 1) / 2 * innerWidth - e.clientX, (1 - _ns.y) / 2 * innerHeight - e.clientY);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
 }
 
 // ───────────────────────── inchworms: tiny loopers inching up and down the stems (zoom right in to find them)
@@ -2777,13 +2790,14 @@ function respawnCrawlers() {   // a few on the current plant's stems
   for (let k = 0; k < params.spiders; k++) spiders.push(new Spider(allStems[Math.floor(Math.random() * allStems.length)]));
 }
 function updateCrawlers(dt, t) { for (const w of [...worms, ...bugs, ...flies, ...spiders]) w.update(dt, t); }
-function pickCrawler(e) {
+function pickCrawler(e, near = false) {
   ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
-  const hits = raycaster.intersectObjects([...worms, ...bugs, ...flies, ...spiders].filter((w) => w.group.visible).map((w) => w.group), true);
+  const list = [...worms, ...bugs, ...flies, ...spiders].filter((w) => w.group.visible);
+  const hits = raycaster.intersectObjects(list.map((w) => w.group), true);
   let o = hits[0]?.object;
   while (o && !o.userData.crawler) o = o.parent;
-  return o?.userData.crawler ?? null;
+  return o?.userData.crawler ?? (near ? nearOnScreen(list, e) : null);
 }
 
 // ───────────────────────── falling foliage: now and then a petal or a leaf lets go, rocks and drifts down on the breeze,
@@ -2981,10 +2995,10 @@ addEventListener('keydown', (e) => {
 });
 addEventListener('pointerdown', initAudio);
 
-// ───────────────────────── camera: drag orbits; hold still a moment then drag pans; double-click recentres
+// ───────────────────────── camera: drag orbits; right-, shift- or hold-then-drag pans; double-click recentres
 const HOLD_MS = 280, HOLD_SLOP = 5;   // how long to hold, and how far the pointer may wander while holding
 let follow = true, hold = null;
-const canvas = renderer.domElement, touches = new Set();
+const canvas = renderer.domElement, touches = new Map();   // touch pointers down: id → where
 function recentre() { follow = true; camTarget.copy(current.center); fitDist = frameDistance(current.radius); }
 function panBy(dx, dy) {
   const k = 2 * camera.position.distanceTo(controls.target) * Math.tan(camera.fov * Math.PI / 360) / innerHeight;
@@ -2999,8 +3013,8 @@ function endHold() {
   hold = null;
 }
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.pointerType === 'touch') touches.add(e.pointerId);
-  if (e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey || touches.size > 1) { follow = false; fitDist = 0; endHold(); return; } // built-in pans
+  if (e.pointerType === 'touch') return;   // touch has its own gestures (below)
+  if (e.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey) { follow = false; fitDist = 0; endHold(); return; } // built-in pans
   if (e.button !== 0) return;
   hold = { x: e.clientX, y: e.clientY, id: e.pointerId, active: false };
   hold.timer = setTimeout(() => {
@@ -3017,8 +3031,125 @@ addEventListener('pointermove', (e) => {
   hold.x = e.clientX; hold.y = e.clientY;
   panBy(dx, dy);
 });
-for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => { touches.delete(e.pointerId); endHold(); });
+for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, endHold);
 canvas.addEventListener('dblclick', recentre);
+// ───────────────────────── zoom, swipe and touch: pinch or scroll zooms toward whatever's under the pointer (like a map),
+// a sideways two-finger swipe orbits; on touch, one finger orbits, two fingers pinch-zoom and pan, double-tap recentres
+controls.enableZoom = false;            // we do zoom ourselves, toward the pointer
+controls.touches = { ONE: -1, TWO: -1 }; // and all touch gestures
+const ZOOM = {
+  wheel: 0.0018,          // log-zoom per pixel of scroll (a mouse-wheel notch ≈ 20%)
+  pinch: 0.01,            // log-zoom per pixel of trackpad pinch
+  ease: 20,               // how quickly a scroll's zoom catches up (per second)
+};
+const zoomQ = { log: 0, p: new V3() };
+const _zn = new V3(), _zp = new THREE.Plane();
+function zoomAnchor(x, y, out) {   // the point under (x, y), on the plane through the target facing the camera
+  ndc.set(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  _zp.setFromNormalAndCoplanarPoint(camera.getWorldDirection(_zn), controls.target);
+  return raycaster.ray.intersectPlane(_zp, out) ?? out.copy(controls.target);
+}
+function scaleAbout(P, f) {   // zoom by f (<1 = in) about P, keeping P under the same spot on screen
+  const dist = camera.position.distanceTo(controls.target);
+  f = clamp(dist * f, controls.minDistance, controls.maxDistance) / dist;
+  if (Math.abs(f - 1) < 1e-6) return false;
+  if (P.distanceTo(controls.target) > dist * 0.03) follow = false;   // zooming off-centre: stop sliding back to the plant
+  controls.target.sub(P).multiplyScalar(f).add(P);
+  camera.position.sub(P).multiplyScalar(f).add(P);
+  fitDist = 0;
+  return true;
+}
+function zoomAt(log, x, y) { zoomQ.log += log; zoomAnchor(x, y, zoomQ.p); fitDist = 0; }   // eased (scroll / trackpad)
+function zoomNow(f, x, y) { scaleAbout(zoomAnchor(x, y, new V3()), f); }                   // immediate (fingers)
+const _sph = new THREE.Spherical(), _off = new V3();
+function orbitBy(dAz, dPol) {
+  _off.subVectors(camera.position, controls.target);
+  _sph.setFromVector3(_off);
+  _sph.theta += dAz;
+  _sph.phi = clamp(_sph.phi + dPol, controls.minPolarAngle, controls.maxPolarAngle);
+  camera.position.copy(controls.target).add(_off.setFromSpherical(_sph));
+}
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault(); initAudio();
+  const px = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1;
+  const dx = e.deltaX * px, dy = e.deltaY * px;
+  if (e.ctrlKey) zoomAt(clamp(dy, -60, 60) * ZOOM.pinch, e.clientX, e.clientY);              // trackpad pinch (Chrome, Firefox, Edge)
+  else if (Math.abs(dx) > Math.abs(dy)) orbitBy(dx * TAU / innerHeight, 0);                    // sideways swipe: walk round the plant
+  else zoomAt(clamp(dy, -150, 150) * ZOOM.wheel, e.clientX, e.clientY);                       // scroll / mouse wheel
+}, { passive: false });
+// Safari sends trackpad pinches as gesture events instead (and iOS uses them to zoom the page, which we don't want)
+let gScale = 1;
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => {
+  e.preventDefault();
+  if (ev === 'gesturestart') gScale = 1;
+  else if (ev === 'gesturechange' && !touches.size) { zoomAt(Math.log(gScale / e.scale), e.clientX, e.clientY); gScale = e.scale; }
+}, { passive: false });
+// touch
+const DOUBLE_TAP = { ms: 320, px: 40 };
+let touchMode = null, pinchPrev = null, lastTap = null;
+const orbitV = { az: 0, pol: 0 };       // a flicked orbit carries on and slows
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  const now = performance.now();
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t0: now, tm: now });
+  orbitV.az = orbitV.pol = 0;
+  if (touches.size === 2) {
+    // the first finger happened to land on the plant, but this is a pinch: let go of the stem (it hasn't moved yet)
+    if (grab && !grab.moved && now - grab.t0 < 350) { grab.stem.held = null; grab = null; canvas.style.cursor = ''; }
+    touchMode = grab || tear ? 'busy' : 'pinch'; pinchPrev = null;
+  }
+}, { capture: true });   // before the grab handler, so a second finger never grabs the plant
+addEventListener('pointermove', (e) => {
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  const dx = e.clientX - t.x, dy = e.clientY - t.y, now = performance.now(), el = Math.max(8, now - t.tm) / 1000;
+  t.x = e.clientX; t.y = e.clientY; t.tm = now;
+  if (grab || tear) return;   // that finger is bending the plant or tearing a web
+  if (touches.size === 1) {
+    if (!touchMode && Math.hypot(t.x - t.sx, t.y - t.sy) > 4) touchMode = 'orbit';
+    if (touchMode !== 'orbit') return;
+    const k = TAU / innerHeight;
+    orbitBy(-dx * k, -dy * k);
+    orbitV.az = lerp(orbitV.az, -dx * k / el, 0.5); orbitV.pol = lerp(orbitV.pol, -dy * k / el, 0.5);
+  } else if (touchMode === 'pinch') {
+    const [a, b] = touches.values(), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchPrev && d > 10) {
+      zoomNow(pinchPrev.d / d, mx, my);
+      if (Math.hypot(mx - pinchPrev.mx, my - pinchPrev.my) > 0.5) { follow = false; fitDist = 0; panBy(mx - pinchPrev.mx, my - pinchPrev.my); }
+    }
+    pinchPrev = { mx, my, d };
+  }
+});
+for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => {
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  touches.delete(e.pointerId);
+  const now = performance.now();
+  if (touches.size === 0) {
+    if (touchMode !== 'orbit' || now - t.tm > 80) orbitV.az = orbitV.pol = 0;   // held still before lifting: no flick
+    // a quick tap on empty space; two in a row recentres
+    if (!touchMode && ev === 'pointerup' && now - t.t0 < 300 && Math.hypot(t.x - t.sx, t.y - t.sy) < 10 && !pick(e) && !pickCritter(e) && !pickCrawler(e)) {
+      if (lastTap && now - lastTap.t < DOUBLE_TAP.ms && Math.hypot(t.x - lastTap.x, t.y - lastTap.y) < DOUBLE_TAP.px) { recentre(); lastTap = null; }
+      else lastTap = { t: now, x: t.x, y: t.y };
+    }
+    touchMode = null;
+  } else if (touchMode === 'pinch' || touchMode === 'busy') touchMode = 'done';   // the finger left behind doesn't start orbiting
+  pinchPrev = null;
+});
+function updateCamera(dt) {
+  if (zoomQ.log) {
+    const step = zoomQ.log * (1 - Math.exp(-ZOOM.ease * dt));
+    zoomQ.log = Math.abs(zoomQ.log - step) < 1e-4 ? 0 : zoomQ.log - step;
+    if (!scaleAbout(zoomQ.p, Math.exp(step))) zoomQ.log = 0;   // hit the near/far limit
+  }
+  if (!touches.size && (orbitV.az || orbitV.pol)) {
+    orbitBy(orbitV.az * dt, orbitV.pol * dt);
+    const k = Math.exp(-5 * dt); orbitV.az *= k; orbitV.pol *= k;
+    if (Math.abs(orbitV.az) + Math.abs(orbitV.pol) < 0.01) orbitV.az = orbitV.pol = 0;
+  }
+}
+
 
 // ───────────────────────── grab a stem, leaf or flower to bend it; let go and it springs back
 const GRAB_MAX = 0.8;   // furthest a tip can be pulled, as a fraction of stem length (rubber-bands past this)
@@ -3064,11 +3195,16 @@ canvas.addEventListener('pointerdown', (e) => {
     try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic pointers can't be captured */ }
     return;
   }
-  if (!hit) return;
+  // a finger that just misses a critter: if it's a tap (not a drag) the critter gets it, decided on release
+  const nearby = e.pointerType === 'touch' ? pickCrawler(e, true) || pickCritter(e, true) : null;
+  if (!hit) {
+    if (nearby) { e.stopImmediatePropagation(); initAudio(); touchCritter(nearby); }
+    return;
+  }
   e.stopImmediatePropagation();   // not an orbit, not a pan
   initAudio();
   const { stem, f, point } = hit;
-  grab = { ...hit, id: e.pointerId, f: Math.max(f, 0.12), x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false,
+  grab = { ...hit, nearby, id: e.pointerId, f: Math.max(f, 0.12), x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false,
     plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), point),
     lift: point.clone().sub(stem.at(f, new V3())) };  // where on the surface we grabbed
   stem.held = { goal: stem.off.clone(), prev: stem.off.clone() };
@@ -3096,12 +3232,17 @@ addEventListener('pointermove', (e) => {
   if (m > 1e-6) goal.multiplyScalar(max * Math.tanh(m / max) / m);
   stem.held.goal.copy(goal);
 });
+function touchCritter(c) {   // poke a crawler, shoo a flyer
+  if (c.poke) c.poke();
+  else c.shoo(camera.getWorldDirection(new V3()).setY(0).normalize());
+}
 function release() {
   if (!grab) return;
   const { stem, flower } = grab, k = clamp01(stem.off.length() / (GRAB_MAX * stem.len));
   stem.held = null;
   if (!grab.moved && performance.now() - grab.t0 < 400) {   // a click, not a drag
-    if (flower) toggleBloom(flower, stem);
+    if (grab.nearby) touchCritter(grab.nearby);
+    else if (flower) toggleBloom(flower, stem);
     canvas.style.cursor = ''; grab = null;
     return;
   }
@@ -3167,6 +3308,7 @@ function frame() {
   plants = plants.filter((p) => !p.dead);
   particles.update(dt);
   poofs.update(dt);
+  updateCamera(dt);
   // keep the plant centred: slide target (and camera with it) toward the plant's middle
   if (follow) {
     const step = camTarget.clone().sub(controls.target).multiplyScalar(1 - Math.exp(-4 * dt));
