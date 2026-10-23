@@ -92,6 +92,7 @@ const params = {
   ants: 24,
   rain: 0.4,    // how often showers come (0 = never)
   hairs: true,   // fine hairs on the stems, shown when zoomed right in
+  dof: true,     // macro focus: zoomed right in, the background goes soft
   ambience: 0.7, // volume of the birds / crickets / frogs (0 = off)
   critters: 0.6, // volume of the up-close critter sounds (0 = off)
 };
@@ -160,6 +161,7 @@ controls.minDistance = 0.4;
 controls.maxDistance = 16;
 controls.minPolarAngle = 0.05;
 controls.maxPolarAngle = Math.PI - 0.05;
+const CAM_MIN_Y = 0.03;   // the camera (and what it orbits) never goes below this: orbiting stops at the ground (see frame)
 const camTarget = new V3(0, 1.55, 0);
 controls.target.copy(camTarget);
 let fitDist = 0;                           // >0 while easing the zoom to frame a new plant
@@ -313,7 +315,6 @@ const sfx = {
   tap() { if (!canPlay('tap', 0.06)) return; tone({ type: 'triangle', f0: 900 + Math.random() * 300, f1: 600, dur: 0.05, vol: 0.025 }); },
   poof(k = 1) { if (!canPlay('poof', 0.08)) return; tone({ f0: 210, f1: 470 + 120 * k, dur: 0.1, vol: 0.022 + 0.018 * k, attack: 0.012 });
     tone({ type: 'triangle', f0: 1500, f1: 950, dur: 0.05, vol: 0.007, delay: 0.035 }); },
-  silk() { if (!canPlay('silk', 0.035)) return; tone({ type: 'triangle', f0: 2300 + Math.random() * 700, f1: 1500, dur: 0.03, vol: 0.011 }); },
   grab() { if (!canPlay('grab', 0.05)) return; tone({ f0: 280, f1: 420, dur: 0.12, vol: 0.045, vib: 20, vibHz: 16 }); },
   boing(k) { if (!canPlay('boing', 0.05)) return; // k: 0..1 how far it was bent
     tone({ f0: 160, f1: 260 + 260 * k, dur: 0.25 + 0.25 * k, vol: 0.03 + 0.04 * k, vib: 10 + 40 * k, vibHz: 11 }); },
@@ -1834,16 +1835,17 @@ const BUG = {
   speed: 0.055,           // walking speed (units / s)
   flySpeed: 0.3,          // flight speed between stems (units / s); hops take at least 1.6 s
 };
-const BUG_U = { uShell: { value: raw('#f2765e') }, uSpot: { value: raw('#413333') } };
+// varieties: the classic red with spots, and a plain dark green one (every third ladybug)
+const BUG_KINDS = [{ shell: '#f2765e', spots: 1 }, { shell: '#3a4739', spots: 0 }];
 // shell: two half-domes (they open for flight); spots painted crisp in unit-dome coordinates
-const BUG_SHELL_MAT = shaderMat(BUG_U, `attribute vec3 aBase; varying vec3 vB;
-void main() { vB = aBase; vec4 wp = modelMatrix * vec4(position, 1.0); ${BEND} }`, `uniform vec3 uShell; uniform vec3 uSpot; varying vec3 vB;
+const bugShellMat = ({ shell, spots }) => shaderMat({ uShell: { value: raw(shell) }, uSpot: { value: raw('#413333') }, uSpots: { value: spots } }, `attribute vec3 aBase; varying vec3 vB;
+void main() { vB = aBase; vec4 wp = modelMatrix * vec4(position, 1.0); ${BEND} }`, `uniform vec3 uShell; uniform vec3 uSpot; uniform float uSpots; varying vec3 vB;
 float dot3(vec3 q, vec3 c, float r) { float d = length(q - c) - r, aa = fwidth(d); return 1.0 - smoothstep(-aa, aa, d); }
 void main() {
   vec3 q = vec3(abs(vB.x), vB.y, vB.z);   // mirrored, so both halves match
   float s = max(max(dot3(q, vec3(0.5, 0.7, 0.35), 0.2), dot3(q, vec3(0.62, 0.55, -0.4), 0.18)), dot3(q, vec3(0.25, 0.85, -0.25), 0.15));
   s = max(s, dot3(vB, vec3(0.0, 0.95, 0.75), 0.22) * step(0.0, vB.y));   // one spot over the seam, near the front
-  vec3 c = mix(uShell, uSpot, s);
+  vec3 c = mix(uShell, uSpot, s * uSpots);
   if (!gl_FrontFacing) c = uSpot;
   gl_FragColor = vec4(c, 1.0);
   ${GRAIN_F}
@@ -1882,12 +1884,13 @@ function stemFrame(st, s, th, lift, out) {
   st.at(f, out).addScaledVector(_gr, lerp(st.r0, st.r1, f) + lift);
   return { f, up: _gr, along: _gt, around };
 }
+const BUG_SHELL_MATS = BUG_KINDS.map(bugShellMat);
 class Ladybug {
   constructor(stem, k) {
     this.group = new THREE.Group(); this.group.userData.crawler = this;   // pickable (see pickCrawler)
     const rig = new THREE.Group(); rig.scale.setScalar(BUG.size); this.group.add(rig);
     this.halves = BUG_HALVES.map((g, i) => {
-      const side = i ? 1 : -1, hinge = new THREE.Group(), m = new THREE.Mesh(g, BUG_SHELL_MAT);
+      const side = i ? 1 : -1, hinge = new THREE.Group(), m = new THREE.Mesh(g, BUG_SHELL_MATS[k % 3 === 1 ? 1 : 0]);
       hinge.position.set(side * BUG_HINGE.x, BUG_HINGE.y, BUG_HINGE.z);
       m.position.copy(hinge.position).negate();   // the half stays put at rest; it swings about the hinge
       hinge.add(m); hinge.userData.side = side; rig.add(hinge);
@@ -2544,16 +2547,16 @@ const WEBS = {
   spokes: 12, turns: 6,
   near: 0.9, far: 2.2,    // camera distance where a web is fully visible / starts to show
 };
-const WEB_MAT = new THREE.LineBasicMaterial({ color: 0xc9cfd6, transparent: true, opacity: 0, depthWrite: false });
+const WEB_MAT = new THREE.LineBasicMaterial({ color: 0xc9cfd6, transparent: true, opacity: 0 });   // writes depth, so macro focus treats it as solid
 const WEB_DEW_MAT = shaderMat({ uScale: particles.uScale, uOp: { value: 0 } },
   `uniform float uScale; void main() { vec4 mv = viewMatrix * modelMatrix * vec4(position, 1.0); gl_PointSize = clamp(0.004 * uScale / -mv.z, 1.5, 4.0); gl_Position = projectionMatrix * mv; }`,
-  `uniform float uOp; void main() { gl_FragColor = vec4(0.82, 0.9, 0.96, uOp); }`, { transparent: true, depthWrite: false });
-let webs = [], tear = null;
-const _wa = new V3(), _wb2 = new V3(), _w1 = new V3(), _w2 = new V3(), _w3 = new V3();
+  `uniform float uOp; void main() { gl_FragColor = vec4(0.82, 0.9, 0.96, uOp); }`, { transparent: true });
+let webs = [];
+const _wa = new V3(), _wb2 = new V3(), _w1 = new V3();
 const WEB_CY = -0.12;   // hub sits a touch below the line between the anchors
 function webShape() {   // the web in its own 2D frame: anchors 'A' at (-1, 0) and 'B' at (1, 0); returns threads and dew spots
   const segs = [], dew = [], N = WEBS.spokes, R0 = 0.72, cy = WEB_CY, rim = [];
-  const add = (a, b) => { segs.push({ a, b, cut: -1, r: 0 }); return segs.length - 1; };
+  const add = (a, b) => { segs.push({ a, b }); return segs.length - 1; };
   for (let i = 0; i < N; i++) { const a = i / N * TAU + 0.2; rim.push([Math.cos(a) * R0 * (0.9 + 0.2 * Math.sin(i * 2.3)), cy + Math.sin(a) * R0 * 0.95]); }
   for (const p of rim) add([0, cy], p);                                         // spokes
   for (let i = 0; i < N; i++) add(rim[i], rim[(i + 1) % N]);                    // the frame round the edge
@@ -2563,15 +2566,15 @@ function webShape() {   // the web in its own 2D frame: anchors 'A' at (-1, 0) a
   let prev = null;
   for (let k = 0; k <= steps; k++) {
     const i = k % N, f = 0.14 + 0.82 * k / steps, p = rim[i], q = [p[0] * f, cy + (p[1] - cy) * f];
-    const s = prev ? add(prev, q) : -1;
-    if (k % 2 === 0) dew.push({ p: q, seg: s });
+    if (prev) add(prev, q);
+    if (k % 2 === 0) dew.push({ p: q });
     prev = q;
   }
   return { segs, dew };
 }
 function buildWebs() {
   for (const w of webs) { scene.remove(w.lines, w.beads); w.lines.geometry.dispose(); w.beads.geometry.dispose(); w.mat.dispose(); }
-  webs = []; tear = null;
+  webs = [];
   if (!current) return;
   const stems = current.stems.filter((s) => s.collide);
   const want = Math.round(R(Math.random, WEBS.count[0], WEBS.count[1] + 0.99) - 0.49);
@@ -2586,7 +2589,7 @@ function buildWebs() {
     const { segs, dew } = webShape();
     const mat = WEB_MAT.clone();
     const lines = new THREE.LineSegments(new THREE.BufferGeometry(), mat);
-    lines.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs.length * 12), 3).setUsage(THREE.DynamicDrawUsage));
+    lines.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs.length * 6), 3).setUsage(THREE.DynamicDrawUsage));
     const beads = new THREE.Points(new THREE.BufferGeometry(), WEB_DEW_MAT);
     beads.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(dew.length * 3), 3).setUsage(THREE.DynamicDrawUsage));
     lines.frustumCulled = beads.frustumCulled = false;
@@ -2599,51 +2602,6 @@ function buildWebs() {
 function webWorld(w, p, out) {
   if (typeof p === 'string') return out.copy(p === 'A' ? w.pa : w.pb);
   return out.copy(w.c).addScaledVector(w.x, p[0] * w.size).addScaledVector(w.y, p[1] * w.size);
-}
-function webLocal(w, p) {
-  if (typeof p !== 'string') return p;
-  _w3.subVectors(p === 'A' ? w.pa : w.pb, w.c);
-  return [_w3.dot(w.x) / w.size, _w3.dot(w.y) / w.size];
-}
-// the pointer swept from p to q (web-frame 2D): snap every thread it crosses
-function cutAlong(w, p, q) {
-  let n = 0;
-  for (let i = 0; i < w.segs.length; i++) {
-    const s = w.segs[i];
-    if (s.cut >= 0) continue;
-    const a = webLocal(w, s.a), b = webLocal(w, s.b);
-    const d1x = q[0] - p[0], d1y = q[1] - p[1], d2x = b[0] - a[0], d2y = b[1] - a[1], den = d1x * d2y - d1y * d2x;
-    if (Math.abs(den) < 1e-9) continue;
-    const ex = a[0] - p[0], ey = a[1] - p[1];
-    const u = (ex * d2y - ey * d2x) / den, t = (ex * d1y - ey * d1x) / den;
-    if (u < 0 || u > 1 || t < 0.03 || t > 0.97) continue;
-    s.cut = t; s.r = 0; n++;
-  }
-  if (n) { sfx.silk(); if (rain.wet > 0.3) splash(webWorld(w, q, new V3()), 2); }
-}
-// where the pointer ray meets a web's plane; reach > 1 also counts a little outside the web, to start a swipe from beside it
-function webHit(e, maxDist = Infinity, reach = 1) {
-  ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
-  let best = null;
-  for (const w of webs) {
-    if (!w.lines.visible || w.vis < 0.25) continue;
-    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(w.z, w.c), p = raycaster.ray.intersectPlane(plane, new V3());
-    if (!p) continue;
-    const dist = p.distanceTo(raycaster.ray.origin);
-    _w3.subVectors(p, w.c);
-    const u = _w3.dot(w.x) / w.size, v = _w3.dot(w.y) / w.size;
-    if (dist < maxDist && Math.hypot(u, v - WEB_CY) < 0.85 * reach && (!best || dist < best.dist)) best = { w, uv: [u, v], dist };
-  }
-  return best;
-}
-function webPointer(e, w) {   // the pointer in a web's frame, wherever it is
-  ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
-  const p = raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(w.z, w.c), new V3());
-  if (!p) return null;
-  _w3.subVectors(p, w.c);
-  return [_w3.dot(w.x) / w.size, _w3.dot(w.y) / w.size];
 }
 function updateWebs(dt) {
   let dewVis = 0;
@@ -2661,20 +2619,9 @@ function updateWebs(dt) {
     const lp = w.lines.geometry.attributes.position.array, bp = w.beads.geometry.attributes.position.array;
     w.segs.forEach((s, i) => {
       webWorld(w, s.a, _wa); webWorld(w, s.b, _wb2);
-      let o = i * 12;
-      const put = (v) => { lp[o++] = v.x; lp[o++] = v.y; lp[o++] = v.z; };
-      if (s.cut < 0) { put(_wa); put(_wb2); put(_wb2); put(_wb2); return; }
-      // snapped: each half springs back toward its end and droops a little
-      s.r = Math.min(1, s.r + dt / 0.35);
-      const e = 1 - (1 - s.r) ** 3;
-      _w1.lerpVectors(_wa, _wb2, s.cut);
-      _w2.lerpVectors(_w1, _wa, 0.7 * e); _w2.y -= 0.25 * e * _w1.distanceTo(_wa);
-      put(_wa); put(_w2);
-      _w2.lerpVectors(_w1, _wb2, 0.7 * e); _w2.y -= 0.25 * e * _w1.distanceTo(_wb2);
-      put(_wb2); put(_w2);
+      lp.set([_wa.x, _wa.y, _wa.z, _wb2.x, _wb2.y, _wb2.z], i * 6);
     });
-    w.dew.forEach((d, i) => {   // beads on a snapped thread are shaken off
-      if (d.seg >= 0 && w.segs[d.seg].cut >= 0) { bp[i * 3] = 0; bp[i * 3 + 1] = -10; bp[i * 3 + 2] = 0; return; }
+    w.dew.forEach((d, i) => {
       webWorld(w, d.p, _w1); bp[i * 3] = _w1.x; bp[i * 3 + 1] = _w1.y; bp[i * 3 + 2] = _w1.z;
     });
     w.lines.geometry.attributes.position.needsUpdate = w.beads.geometry.attributes.position.needsUpdate = true;
@@ -2967,6 +2914,7 @@ fs.add(params, 'critters', 0, 1, 0.01).name('critters (up close)');
 const fl = gui.addFolder('Look').close();
 fl.add(GRAIN, 'value', 0, 0.3, 0.005).name('grain');
 fl.add(params, 'hairs').name('stem hairs (zoom in)');
+fl.add(params, 'dof').name('macro focus (zoom in)');
 const fc = gui.addFolder('Colours').close();
 const setColour = (k, v) => { PAL[k] = v; U[k].value.copy(raw(v)); };   // (the sky is applied each frame, tinted by rain)
 for (const k of Object.keys(PAL)) fc.addColor(PAL, k).onChange((v) => setColour(k, v));
@@ -3097,7 +3045,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (touches.size === 2) {
     // the first finger happened to land on the plant, but this is a pinch: let go of the stem (it hasn't moved yet)
     if (grab && !grab.moved && now - grab.t0 < 350) { grab.stem.held = null; grab = null; canvas.style.cursor = ''; }
-    touchMode = grab || tear ? 'busy' : 'pinch'; pinchPrev = null;
+    touchMode = grab ? 'busy' : 'pinch'; pinchPrev = null;
   }
 }, { capture: true });   // before the grab handler, so a second finger never grabs the plant
 addEventListener('pointermove', (e) => {
@@ -3105,7 +3053,7 @@ addEventListener('pointermove', (e) => {
   if (!t) return;
   const dx = e.clientX - t.x, dy = e.clientY - t.y, now = performance.now(), el = Math.max(8, now - t.tm) / 1000;
   t.x = e.clientX; t.y = e.clientY; t.tm = now;
-  if (grab || tear) return;   // that finger is bending the plant or tearing a web
+  if (grab) return;   // that finger is bending the plant
   if (touches.size === 1) {
     if (!touchMode && Math.hypot(t.x - t.sx, t.y - t.sy) > 4) touchMode = 'orbit';
     if (touchMode !== 'orbit') return;
@@ -3188,13 +3136,6 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   const hit = pick(e);
-  const wh = webHit(e, hit ? camera.position.distanceTo(hit.point) : Infinity, hit ? 1 : 1.4);
-  if (wh) {   // on (or just beside) a web: drag through it to tear it
-    e.stopImmediatePropagation(); initAudio();
-    tear = { w: wh.w, id: e.pointerId, last: wh.uv };
-    try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic pointers can't be captured */ }
-    return;
-  }
   // a finger that just misses a critter: if it's a tap (not a drag) the critter gets it, decided on release
   const nearby = e.pointerType === 'touch' ? pickCrawler(e, true) || pickCritter(e, true) : null;
   if (!hit) {
@@ -3213,12 +3154,7 @@ canvas.addEventListener('pointerdown', (e) => {
   stem.kick(0.02);
 }, { capture: true });
 addEventListener('pointermove', (e) => {
-  if (tear && e.pointerId === tear.id) {
-    const q = webPointer(e, tear.w);
-    if (q) { cutAlong(tear.w, tear.last, q); tear.last = q; }
-    return;
-  }
-  if (!grab) { if (!hold && e.target === canvas && !e.buttons) canvas.style.cursor = pickCritter(e) || pickCrawler(e) ? 'pointer' : pick(e) ? 'grab' : webHit(e) ? 'crosshair' : ''; return; }
+  if (!grab) { if (!hold && e.target === canvas && !e.buttons) canvas.style.cursor = pickCritter(e) || pickCrawler(e) ? 'pointer' : pick(e) ? 'grab' : ''; return; }
   if (e.pointerId !== grab.id) return;
   if (!grab.moved && Math.hypot(e.clientX - grab.x0, e.clientY - grab.y0) > CLICK_SLOP) { grab.moved = true; sfx.grab(); }
   ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
@@ -3251,7 +3187,7 @@ function release() {
   canvas.style.cursor = '';
   grab = null;
 }
-for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => { if (grab && e.pointerId === grab.id) release(); if (tear && e.pointerId === tear.id) tear = null; });
+for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => { if (grab && e.pointerId === grab.id) release(); });
 const CLICK_SLOP = 6;   // px a press may wander and still count as a click
 function toggleBloom(flower, stem) {   // a bud (or half-open flower) opens; an open flower closes back to a bud
   const opening = flower.target < 0.75;
@@ -3263,12 +3199,87 @@ function toggleBloom(flower, stem) {   // a bud (or half-open flower) opens; an 
   else { sfx.sink(); if (flower.b > 0.4) poof(at, 0.9); }   // closing squeezes out a puff
 }
 
+// ───────────────────────── macro focus: zoom right in and it behaves like a macro lens. The nearest stems in the middle
+// of the view stay sharp and everything further back goes gradually soft. Only what's *behind* the focus blurs, so nothing
+// near smears over the sharp stems. At normal zoom it's off (and costs nothing).
+const DOF = {
+  near: 0.7, far: 1.9,    // camera distance (to what it orbits) where the effect is full / starts to fade in
+  blur: 9,                // softest blur radius, in CSS pixels
+  range: 0.45,            // how far past the focus (as a fraction of the focus distance) until fully soft
+};
+const dofRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(1, 1) });
+dofRT.texture.colorSpace = THREE.SRGBColorSpace;   // so built-in materials write exactly what they'd write to the screen
+const dofMat = new THREE.ShaderMaterial({
+  uniforms: { tColor: { value: dofRT.texture }, tDepth: { value: dofRT.depthTexture }, uNear: { value: 0 }, uFar: { value: 1 },
+    uFocus: { value: 1 }, uRange: { value: DOF.range }, uBlur: { value: 0 }, uRes: { value: new THREE.Vector2() } },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `#include <packing>
+uniform sampler2D tColor; uniform sampler2D tDepth; uniform float uNear, uFar, uFocus, uRange, uBlur; uniform vec2 uRes; varying vec2 vUv;
+float coc(vec2 uv) {   // 0 = in focus (or nearer), 1 = as soft as it gets
+  float z = -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, uNear, uFar);
+  return clamp((z - uFocus) / (uFocus * uRange), 0.0, 1.0);
+}
+void main() {
+  vec4 base = texture2D(tColor, vUv);
+  float c0 = coc(vUv), R = c0 * uBlur;
+  if (R < 0.5) { gl_FragColor = base; return; }
+  vec3 acc = base.rgb; float wsum = 1.0;
+  for (int i = 0; i < 24; i++) {   // a golden-angle disc of taps
+    float fi = float(i) + 0.5, r = sqrt(fi / 24.0), a = fi * 2.39996323;
+    vec2 uv = vUv + vec2(cos(a), sin(a)) * r * R / uRes;
+    // a tap only counts if its own blur reaches back here: keeps sharp stems from bleeding into the soft background
+    float w = clamp(coc(uv) * uBlur - r * R + 1.0, 0.0, 1.0);
+    acc += texture2D(tColor, uv).rgb * w; wsum += w;
+  }
+  gl_FragColor = vec4(acc / wsum, 1.0);
+}`,
+  depthTest: false, depthWrite: false,
+});
+const dofScene = new THREE.Scene(), dofCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const dofQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), dofMat);
+dofQuad.frustumCulled = false; dofScene.add(dofQuad);
+let dofFocus = 1;
+const _df = new V3();
+function render(dt) {
+  const s = params.dof ? DOF.force ?? smooth(DOF.far, DOF.near, camera.position.distanceTo(controls.target)) : 0;
+  if (s < 0.01 || !current) { renderer.render(scene, camera); return; }
+  // focus on the nearest bit of stem in the middle of the view
+  camera.updateMatrixWorld();
+  let near = Infinity;
+  for (const st of current.stems) {
+    if (!st.mesh.visible) continue;
+    for (const p of st.pts) {
+      _df.copy(p).applyMatrix4(camera.matrixWorldInverse);
+      const z = -_df.z;
+      if (z < camera.near || z >= near) continue;
+      _df.copy(p).project(camera);
+      if (Math.abs(_df.x) < 0.6 && Math.abs(_df.y) < 0.6) near = z;
+    }
+  }
+  for (const w of webs) {   // so does a web you're looking at
+    if (!w.lines.visible || w.vis < 0.3) continue;
+    _df.copy(w.c).applyMatrix4(camera.matrixWorldInverse);
+    const z = -_df.z;
+    if (z < camera.near || z >= near) continue;
+    _df.copy(w.c).project(camera);
+    if (Math.abs(_df.x) < 0.6 && Math.abs(_df.y) < 0.6) near = z;
+  }
+  if (!isFinite(near)) near = camera.position.distanceTo(controls.target);
+  dofFocus = lerp(dofFocus, near, 1 - Math.exp(-6 * dt));
+  const u = dofMat.uniforms;
+  u.uNear.value = camera.near; u.uFar.value = camera.far; u.uFocus.value = dofFocus; u.uRange.value = DOF.range;
+  u.uBlur.value = DOF.blur * s * renderer.getPixelRatio();
+  renderer.setRenderTarget(dofRT); renderer.render(scene, camera);
+  renderer.setRenderTarget(null); renderer.render(dofScene, dofCam);
+}
+
 function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   particles.uScale.value = innerHeight * renderer.getPixelRatio() / (2 * Math.tan(camera.fov * Math.PI / 360));
   renderer.getDrawingBufferSize(DROP_U.uRes.value);
   DROP_U.uPx.value = RAIN.px * renderer.getPixelRatio();
+  dofRT.setSize(DROP_U.uRes.value.x, DROP_U.uRes.value.y); dofMat.uniforms.uRes.value.copy(DROP_U.uRes.value);
 }
 addEventListener('resize', resize);
 resize();
@@ -3276,7 +3287,7 @@ resize();
 // ───────────────────────── go
 regen(params.seed);
 syncCritters();
-window.plantDebug = { get plant() { return current; }, regen, params, camera, controls, camTarget, critters, worms, bugs, flies, spiders, wind, rain, fallen, dropNow: () => dropOne(time), get dews() { return dews; }, fallingDrops, get ants() { return ants; }, get webs() { return webs; }, poof };
+window.plantDebug = { get plant() { return current; }, regen, params, camera, controls, camTarget, critters, worms, bugs, flies, spiders, wind, rain, fallen, dropNow: () => dropOne(time), get dews() { return dews; }, fallingDrops, get ants() { return ants; }, get webs() { return webs; }, poof, DOF };
 
 const clock = new THREE.Clock();
 let time = 0;
@@ -3319,8 +3330,13 @@ function frame() {
     camera.position.copy(controls.target).addScaledVector(off, lerp(d, fitDist, 1 - Math.exp(-3 * dt)) / d);
     if (Math.abs(d - fitDist) < 0.01) fitDist = 0;
   }
+  // orbit as low as you like, until the camera would touch the ground: the lowest angle depends on how high the target is
+  controls.target.y = Math.max(controls.target.y, CAM_MIN_Y);
+  const camD = camera.position.distanceTo(controls.target);
+  controls.maxPolarAngle = Math.min(Math.PI - 0.05, Math.acos(clamp((CAM_MIN_Y - controls.target.y) / camD, -1, 1)));
+  if (camera.position.y < CAM_MIN_Y) camera.position.y = CAM_MIN_Y;
   controls.update();
-  renderer.render(scene, camera);
+  render(dt);
 }
 </script>
 </body>
