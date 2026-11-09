@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Little Buttercup</title>
+<title>Flora</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #fff;
     font-family: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, sans-serif; }
@@ -91,8 +91,9 @@ const params = {
   spiders: 5,
   ants: 24,
   rain: 0.4,    // how often showers come (0 = never)
+  rot: 0,        // decay: 0 = fresh, 1 = well past it. The same leaves and petals go first every time (see seedRot)
   hairs: true,   // fine hairs on the stems, shown when zoomed right in
-  dof: true,     // macro focus: zoomed right in, the background goes soft
+  dof: false,    // macro focus: zoomed right in, the background goes soft (off by default; switch under Look)
   ambience: 0.7, // volume of the birds / crickets / frogs (0 = off)
   critters: 0.6, // volume of the up-close critter sounds (0 = off)
 };
@@ -112,13 +113,14 @@ const SPECIES = {
     centerH: 0.12, stemR: 1, flowerScale: 1, leafScale: 1,   // centre dome height, size multipliers
   },
   mint: {   // a whole different build: see buildMint
-    structure: 'mint',
+    structure: 'mint', hidden: true,   // (remove hidden to bring it back)
     petals: [5, 5], petalLen: 0.2, petalW: 0.44, petalCup: 0.14, petalOpen: 0.16, centerR: 0.34, sepalLen: 0.5,
     wiggle: 0.03, waves: 1, nod: 0, beads: 0,
     leafW: [0.36, 0.44], leafRound: 0.55,                        // broad ovals with softly rounded tips
     centerH: 0.12, stemR: 1, flowerScale: 1, leafScale: 1,
   },
   alien: {
+    hidden: true,   // (remove hidden to bring it back)
     petals: [3, 7],
     petalLen: 0.3, petalW: 0.2, petalCup: -0.55, petalOpen: 0.5, // long straps that curl back like tentacles
     centerR: 0.5, sepalLen: 0.8,
@@ -126,18 +128,36 @@ const SPECIES = {
     leafW: [0.42, 0.55], leafRound: 1,                           // spoon-shaped paddles
     centerH: 0.12, stemR: 1, flowerScale: 1, leafScale: 1,
   },
+  rosehip: {   // a whole different build: see buildRosehip. Autumn colours of its own (same white sky)
+    structure: 'rosehip', noPollen: true,
+    petals: [5, 5], petalLen: 0.2, petalW: 0.44, petalCup: 0.14, petalOpen: 0.16, centerR: 0.34, sepalLen: 0.5,
+    wiggle: 0, waves: 1, nod: 0, beads: 0,
+    leafW: [0.32, 0.42], leafRound: 0.7,
+    centerH: 0.12, stemR: 1, flowerScale: 1, leafScale: 1,
+    palette: { stemBase: '#2e2320', stemTip: '#a24a38', leafBase: '#a8741f', leafTip: '#e6c94a', petalTip: '#b5392b', petalBase: '#dd8a35', center: '#2b211f' },
+    leafTints: [['#7f8a2e', '#d3d257'], ['#b5561c', '#eba43a'], ['#8a7f26', '#efd65f']],   // more leaf colours, alongside leafBase/leafTip
+  },
+  lace: {   // queen anne's lace, a whole different build: see buildLace. Its own meadow greens and cream (same white sky)
+    label: "queen anne's lace", structure: 'lace', noPollen: true,
+    petals: [5, 5], petalLen: 0.2, petalW: 0.44, petalCup: 0.14, petalOpen: 0.16, centerR: 0.34, sepalLen: 0.5,
+    wiggle: 0, waves: 1, nod: 0, beads: 0,
+    leafW: [0.3, 0.4], leafRound: 0.7,
+    centerH: 0.12, stemR: 1, flowerScale: 1, leafScale: 1,
+    palette: { stemBase: '#4b6642', stemTip: '#8ba562', leafBase: '#46663a', leafTip: '#8cab60', petalTip: '#f3edd9', petalBase: '#dcd9b3', center: '#5a2340' },
+  },
 };
 const hashMatch = location.hash.match(/^#(?:([a-z]+)-)?(\d+)$/);
 const DEFAULT_SPECIES = 'buttercup';   // the one a plain #seed URL means
-params.species = SPECIES[hashMatch?.[1]] ? hashMatch[1] : DEFAULT_SPECIES;
+params.species = SPECIES[hashMatch?.[1]] && !SPECIES[hashMatch[1]].hidden ? hashMatch[1] : DEFAULT_SPECIES;
 let SP = SPECIES[params.species];
 
-// palette: "sunset", for every species (raw hex → shader values, no colour conversion)
+// palette: "sunset", unless a species brings its own colours (raw hex → shader values, no colour conversion)
 const SUNSET = { petalTip: '#ff7c5c', petalBase: '#f0c838', center: '#976d6d', stemBase: '#3a4739', stemTip: '#5ca3c1',
-  leafBase: '#503516', leafTip: '#367d58', sky: '#ffffff' };
+  leafBase: '#503516', leafTip: '#367d58', sky: '#ffffff', rotLight: '#b48f55', rotDark: '#6e5033' };
 const raw = (hex) => { const n = parseInt(hex.slice(1), 16); return new V3((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
-const PAL = { ...SUNSET };
+const PAL = { ...SUNSET, ...SP.palette };
 const U = Object.fromEntries(Object.entries(PAL).map(([k, v]) => [k, { value: raw(v) }]));
+const ROT = { value: 0 }, ROT_U = { uRot: ROT, uRotLight: U.rotLight, uRotDark: U.rotDark };
 
 // ───────────────────────── renderer / scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -204,17 +224,63 @@ void main() { vUv = uv; vec4 wp = modelMatrix * vec4(position, 1.0); ${BEND} }`;
 // stems: plain base→tip gradient
 const STEM_VS = `attribute float aT; varying float vT;
 void main() { vT = aT; vec4 wp = modelMatrix * vec4(position, 1.0); ${BEND} }`;
-const STEM_FS = `uniform vec3 uBase; uniform vec3 uTip; varying float vT;
+const STEM_FS = `uniform vec3 uBase; uniform vec3 uTip; uniform float uRot; uniform vec3 uRotLight; uniform vec3 uRotDark; varying float vT;
 void main() {
   vec3 c = mix(uBase, uTip, smoothstep(0.0, 1.0, vT));
+  if (uRot > 0.0) {   // rot: browning creeps up from the base, and the tips die back
+    float up = uRot * 0.6, back = 1.0 - uRot * 0.3;
+    float brown = max((1.0 - smoothstep(up - 0.1, up + 0.05, vT)) * min(1.0, uRot * 6.0), smoothstep(back - 0.03, back + 0.08, vT) * smoothstep(0.2, 0.6, uRot));
+    c = mix(mix(c, uRotLight, uRot * 0.3), mix(uRotLight, uRotDark, 0.55), brown);
+  }
   gl_FragColor = vec4(c, 1.0);
   ${GRAIN_F}
 }`;
 
+// rot on a leaf or petal, worked out entirely from its own seed and the slider, so it never flickers or changes:
+// aRot = (seed, onset, length, half width). No aRot (x, y, z all 0) means this sheet doesn't rot.
+const ROT_VS = `attribute vec4 aRot; uniform float uRot; varying vec2 vUv; varying vec4 vRot;
+void main() {
+  vUv = uv;
+  vRot = vec4(aRot.z > 0.0 ? clamp((uRot - aRot.y) / 0.6, 0.0, 1.0) : 0.0, aRot.x, aRot.z, aRot.w);
+  vec4 wp = modelMatrix * vec4(position, 1.0); ${BEND}
+}`;
+// round bites out of the edge (and holes, if it has any) with a brown rim, a ragged tip, and browning creeping in from the tip and edges
+const ROT_F = `uniform vec3 uRotLight; uniform vec3 uRotDark; varying vec4 vRot;
+float rotH(float i) { return fract(sin(vRot.y * 91.7 + i * 37.3) * 43758.5453); }
+void rotShade(inout vec3 c, vec2 uv, float holes) {
+  float r = vRot.x;
+  if (r <= 0.0) return;
+  vec2 LW = vRot.zw;
+  float near = 1000.0;
+  for (int n = 0; n < 7; n++) {
+    float i = float(n), isHole = step(5.0, i);
+    if (isHole > holes) continue;
+    float on = rotH(i + 30.0) * 0.7, g = smoothstep(on, on + 0.3, r);
+    if (g <= 0.0) continue;
+    vec2 at = isHole > 0.5 ? vec2(mix(0.25, 0.8, rotH(i)), (rotH(i + 10.0) - 0.5) * 1.1)
+                           : vec2(mix(0.18, 0.95, rotH(i)), rotH(i + 10.0) < 0.5 ? -1.05 : 1.05);
+    float rad = mix(isHole > 0.5 ? 0.12 : 0.28, isHole > 0.5 ? 0.24 : 0.62, rotH(i + 20.0)) * LW.y * g;
+    float d = length(vec2((uv.x - at.x) * LW.x, (uv.y - at.y) * LW.y)) - rad;
+    if (d < 0.0) discard;
+    near = min(near, d / LW.y);
+  }
+  float ph = rotH(60.0) * 6.283;
+  float tip = 1.0 - 0.3 * r * r * rotH(50.0) + 0.03 * sin(uv.y * 9.0 + ph);
+  if (uv.x > tip) discard;
+  near = min(near, (tip - uv.x) * LW.x / LW.y);
+  float e = uv.x * 0.8 + abs(uv.y) * 0.4 + 0.05 * sin(uv.y * 7.0 + ph) + 0.04 * sin(uv.x * 13.0 + ph * 2.0);
+  float front = 1.25 - 1.15 * r, aa = fwidth(e) * 0.75 + 0.001, an = fwidth(near) * 0.75 + 0.001;
+  c = mix(c, uRotLight, r * 0.25);
+  c = mix(c, uRotLight, max(smoothstep(front - aa, front + aa, e), 1.0 - smoothstep(0.1 - an, 0.1 + an, near)));
+  c = mix(c, uRotDark, smoothstep(front + 0.22 - aa, front + 0.22 + aa, e));
+}
+`;
+
 // leaves + sepals: base→tip gradient, crisp two-tone fold down the midrib
-const LEAF_FS = `uniform vec3 uBase; uniform vec3 uTip; varying vec2 vUv;
+const LEAF_FS = ROT_F + `uniform vec3 uBase; uniform vec3 uTip; varying vec2 vUv;
 void main() {
   vec3 c = mix(uBase, uTip, smoothstep(0.0, 1.0, vUv.x));
+  rotShade(c, vUv, 1.0);
   float aa = fwidth(vUv.y) * 0.75;
   c = mix(c, c * 1.12 + 0.025, smoothstep(-aa, aa, vUv.y));
   if (!gl_FrontFacing) c *= 0.84;
@@ -223,29 +289,30 @@ void main() {
 }`;
 
 // petals: warm claw → butter tip
-const PETAL_FS = `uniform vec3 uBase; uniform vec3 uTip; varying vec2 vUv;
+const PETAL_FS = ROT_F + `uniform vec3 uBase; uniform vec3 uTip; varying vec2 vUv;
 void main() {
   vec3 c = mix(uBase, uTip, smoothstep(0.0, 0.7, vUv.x));
+  rotShade(c, vUv, 0.0);
   if (!gl_FrontFacing) c = mix(c, uBase, 0.4) * 0.95;
   gl_FragColor = vec4(c, 1.0);
   ${GRAIN_F}
 }`;
 
 // flower centre: a crisp green disc on a warm ring
-const CENTER_FS = `uniform vec3 uCenter; uniform vec3 uRing; varying vec2 vUv;
+const CENTER_FS = `uniform vec3 uCenter; uniform vec3 uRing; uniform float uRot; uniform vec3 uRotDark; varying vec2 vUv;
 void main() {
   float r = length(vUv), ra = fwidth(r);
-  vec3 c = mix(uCenter, uRing, smoothstep(-ra, ra, r - 0.5));
+  vec3 c = mix(mix(uCenter, uRing, smoothstep(-ra, ra, r - 0.5)), uRotDark, uRot * 0.75);
   gl_FragColor = vec4(c, 1.0);
   ${GRAIN_F}
 }`;
 
 const MAT = {
-  stem: shaderMat({ uBase: U.stemBase, uTip: U.stemTip }, STEM_VS, STEM_FS),
-  receptacle: shaderMat({ uBase: U.leafTip, uTip: U.leafTip }, STEM_VS, STEM_FS),
-  leaf: shaderMat({ uBase: U.leafBase, uTip: U.leafTip }, UV_VS, LEAF_FS, { side: THREE.DoubleSide }),
-  petal: shaderMat({ uBase: U.petalBase, uTip: U.petalTip }, UV_VS, PETAL_FS, { side: THREE.DoubleSide }),
-  center: shaderMat({ uCenter: U.center, uRing: U.petalBase }, UV_VS, CENTER_FS),
+  stem: shaderMat({ uBase: U.stemBase, uTip: U.stemTip, ...ROT_U }, STEM_VS, STEM_FS),
+  receptacle: shaderMat({ uBase: U.leafTip, uTip: U.leafTip, ...ROT_U }, STEM_VS, STEM_FS),
+  leaf: shaderMat({ uBase: U.leafBase, uTip: U.leafTip, ...ROT_U }, ROT_VS, LEAF_FS, { side: THREE.DoubleSide }),
+  petal: shaderMat({ uBase: U.petalBase, uTip: U.petalTip, ...ROT_U }, ROT_VS, PETAL_FS, { side: THREE.DoubleSide }),
+  center: shaderMat({ uCenter: U.center, uRing: U.petalBase, ...ROT_U }, UV_VS, CENTER_FS),
 };
 
 // ───────────────────────── sound (all synthesized)
@@ -495,6 +562,7 @@ const poofs = (() => {
   };
 })();
 function poof(at, k = 1, sound = true) {
+  if (SP.noPollen) return;
   poofs.spawn(at, k);
   particles.spawn(at, Math.round(3 + 5 * k), POOF_COLS(), { spread: 0.025, up: 0.06, s: 0.007, life: 2.4, drag: 0.5,
     vel: new V3(wind.dir.x, 0.15, wind.dir.y).multiplyScalar(0.12 + 0.25 * wind.now) });
@@ -635,12 +703,33 @@ class Flower {
   // 0 = tight green bud, ~0.5 = cupped, 1 = wide open (overshoot allowed: springs past and back)
   setBloom(b) {
     const pitch = lerp(1.42, this.openPitch, b), ps = lerp(0.45, 1, smooth(0, 1, b * 1.3));
-    for (const pm of this.petals) { pm.rotation.x = -pitch; pm.scale.setScalar(Math.max(1e-4, pm.userData.s * ps * (pm.userData.grow ?? 1))); }   // grow: < 1 while regrowing a fallen petal
+    for (const pm of this.petals) {   // grow: < 1 while regrowing a fallen petal; rotS: 0 once rot has taken it; sag: flops as it rots
+      const u = pm.userData;
+      pm.rotation.x = -pitch + (u.sag ?? 0) * clamp01(b);
+      pm.scale.setScalar(Math.max(1e-4, u.s * ps * (u.grow ?? 1) * (u.rotS ?? 1)));
+    }
     const sp = lerp(1.3, -0.5, clamp01(b * 1.5));
     for (const sm of this.sepals) sm.rotation.x = -sp;
     this.center.scale.setScalar(Math.max(1e-4, smooth(0.2, 0.75, b)));
   }
   bloomTo(v) { this.opened = true; this.target = v; this.finalBloom = v; }
+  seedRot(plant, rng) {
+    const on = rng() * 0.35;
+    for (const pm of this.petals) {   // each petal gets its own copy of the shape data, so each decays its own way
+      const P = pm.userData.shape, g = new THREE.BufferGeometry();
+      g.index = pm.geometry.index; g.attributes.position = pm.geometry.attributes.position; g.attributes.uv = pm.geometry.attributes.uv;
+      pm.geometry = plant.keep(withRot(g, rng(), on + rng() * 0.25, P.L, P.W));
+      pm.userData.rot = { lose: R(rng, 0.18, 1.3), sag: R(rng, 0.25, 0.75) };
+    }
+    if (this.sepals[0]) withRot(this.sepals[0].geometry, rng(), on, 0.2, 0.001);   // (a tiny width: they brown, but too small to take bites)
+  }
+  setRot(v) {
+    for (const pm of this.petals) {
+      const r = pm.userData.rot;
+      pm.userData.rotS = 1 - smooth(r.lose - 0.05, r.lose, v);
+      pm.userData.sag = r.sag * v;
+    }
+  }
   update(dt, popX) {
     if (!this.opened && popX > 0.65) { this.opened = true; this.target = this.finalBloom; }
     const goal = this.opened ? this.target * (1 - 0.4 * rain.level) : this.target;   // half-close in the rain
@@ -651,10 +740,10 @@ class Flower {
   }
 }
 
-function makeLeaflet(plant, rng, L, droop) {
+function makeLeaflet(plant, rng, L, droop, mat = MAT.leaf) {
   const W = L * R(rng, SP.leafW[0], SP.leafW[1]), tip = SP.leafRound;
   const profile = (u) => (u < 0.45 ? Math.sin(Math.PI * 0.5 * u / 0.45) ** 0.6 : lerp(1, tip, smooth(0.45, 1, u)));
-  const m = new THREE.Mesh(plant.keep(sheetGeo({ L, W, profile, round: true, fold: 0.3, droop, segU: 22, segV: 6 })), MAT.leaf);
+  const m = new THREE.Mesh(plant.keep(sheetGeo({ L, W, profile, round: true, fold: 0.3, droop, segU: 22, segV: 6 })), mat);
   m.castShadow = true;
   m.userData.leaf = { L, W, droop, width: (u) => W * Math.max(0, profile(u)) };   // walkers use its shape
   return m;
@@ -805,7 +894,7 @@ class Stem {
       else for (const leaf of a.obj.children) {                  // wet leaves droop at their base
         leaf.userData.q0 ??= leaf.quaternion.clone();
         leaf.userData.dr ??= 0.6 + 0.4 * Math.random();
-        leaf.quaternion.copy(leaf.userData.q0).multiply(_dq.setFromAxisAngle(_dx, RAIN_DROOP * rain.wet * leaf.userData.dr));
+        leaf.quaternion.copy(leaf.userData.q0).multiply(_dq.setFromAxisAngle(_dx, RAIN_DROOP * rain.wet * leaf.userData.dr + (leaf.userData.wilt ?? 0)));
       }
       if (!a.flower && wind.now > 0) {   // leaves flutter, harder while a gust goes through
         const fl = 0.14 * wind.now * (0.25 + this.gust);
@@ -887,6 +976,21 @@ class Plant {
     this.stems = []; this.flowers = []; this.geos = []; this.age = 0; this.exit = -1; this.dead = false;
   }
   keep(g) { this.geos.push(g); return g; }
+  setRot(v) {
+    for (const f of this.flowers) f.setRot?.(v);
+    for (const lf of this.rotLeaves ?? []) {
+      const u = lf.userData, r = u.rot;
+      u.wilt = r.wilt * smooth(r.on, r.on + 0.6, v);
+      u.rotS = 1 - smooth(r.lose - 0.04, r.lose, v);
+      if (!regrowing.some((q) => q.obj === lf)) lf.scale.setScalar(Math.max(1e-4, u.rotS));   // (one that's fallen and growing back keeps its own size for now)
+    }
+    if (this.litter) {
+      const m = this.litter.mesh;
+      this.litter.items.forEach((it, i) => m.setMatrixAt(i, _rm.compose(it.p, it.q, _rs.setScalar(Math.max(1e-4, it.L * smooth(it.on, it.on + 0.06, v))))));
+      m.instanceMatrix.needsUpdate = true;
+      m.visible = v > 0;
+    }
+  }
   addStem(o) { const s = new Stem(this, o); this.stems.push(s); this.group.add(s.mesh); return s; }
   // Soft collisions between stems and flower heads. Each stem is a chain of capsules, each open-ish
   // flower a ball. Overlaps nudge the stems' springy tip offsets apart, so bent stems shove their
@@ -969,13 +1073,72 @@ function mulberry32(a) {
 const spaced = (ctrl) => new THREE.CatmullRomCurve3(ctrl, false, 'centripetal').getSpacedPoints(STEM_SAMPLES - 1);
 
 function buildPlant(seed, P) {
-  const plant = SP.structure === 'mint' ? buildMint(seed, P) : buildFlowering(seed, P);
+  const plant = SP.structure === 'mint' ? buildMint(seed, P) : SP.structure === 'rosehip' ? buildRosehip(seed, P) : SP.structure === 'lace' ? buildLace(seed, P) : buildFlowering(seed, P);
   buildGrass(plant, mulberry32(seed * 7 + 3));
+  seedRot(plant, seed);
   const box = new THREE.Box3();
   for (const st of plant.stems) for (const q of st.rest) box.expandByPoint(q);
   plant.center = box.getCenter(new V3());
   plant.radius = box.expandByScalar(0.25).getBoundingSphere(new THREE.Sphere()).radius;
   return plant;
+}
+// ───────────────────────── rot: a slider, not a clock. Everything here is decided once from the seed (its own random stream, so the
+// plant's shape is untouched): each part gets a point on the slider where it starts to go, so the same parts always go first,
+// more rot only ever adds to what's there, and nothing heals or changes while you watch.
+const _rm = new THREE.Matrix4(), _rs = new V3();
+function withRot(g, seed, on, L, W) {
+  const n = g.attributes.position.count, a = new Float32Array(n * 4);
+  for (let i = 0; i < n; i++) a.set([seed, on, L, W], i * 4);
+  g.setAttribute('aRot', new THREE.BufferAttribute(a, 4));
+  return g;
+}
+const LITTER = { count: 64, spread: 0.8, L: [0.06, 0.16] };
+const LITTER_GEO = sheetGeo({ L: 1, W: 0.3, profile: (u) => (u < 0.45 ? Math.sin(Math.PI * 0.5 * u / 0.45) ** 0.6 : lerp(1, 0.45, smooth(0.45, 1, u))), round: true, cupV: 0.06, segU: 8, segV: 2 });
+const LITTER_MAT = shaderMat({ uRotLight: U.rotLight, uRotDark: U.rotDark, uPetal: U.petalTip },
+  `attribute vec2 aL; varying vec2 vL; varying float vV; void main() { vL = aL; vV = uv.y; vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0); ${BEND} }`,
+  `uniform vec3 uRotLight; uniform vec3 uRotDark; uniform vec3 uPetal; varying vec2 vL; varying float vV;
+void main() {
+  vec3 c = mix(mix(uRotLight, uRotDark, vL.x), mix(uPetal, uRotLight, 0.35), vL.y);
+  float aa = fwidth(vV) * 0.75;
+  gl_FragColor = vec4(mix(c, c * 1.12 + 0.025, smoothstep(-aa, aa, vV) * (1.0 - vL.y)), 1.0);   // the same two-tone fold as a living leaf
+  ${GRAIN_F}
+}`, { side: THREE.DoubleSide });
+function seedRot(plant, seed) {
+  const rng = mulberry32(seed * 31 + 11), v = new V3();
+  let top = 0.001;
+  for (const st of plant.stems) top = Math.max(top, st.rest[st.rest.length - 1].y);
+  plant.rotLeaves = [];
+  for (const st of plant.stems) for (const a of st.attach) {
+    if (a.flower) continue;
+    const low = clamp01(st.restAt(a.f, v).y / top);   // the oldest leaves, low on the plant, go first
+    for (const lf of a.obj.children) {
+      const d = lf.userData.leaf;
+      if (!d) continue;
+      const on = clamp01(low * 0.5 + rng() * 0.3);
+      withRot(lf.geometry, rng(), on, d.L, d.W);
+      lf.userData.rot = { on, lose: on + R(rng, 0.45, 1.15), wilt: R(rng, 0.2, 0.85) };
+      plant.rotLeaves.push(lf);
+    }
+  }
+  for (const f of plant.flowers) f.seedRot?.(plant, rng);
+  for (const b of plant.grass ?? []) {
+    const blade = b.g.children[0];
+    withRot(blade.geometry, rng(), rng() * 0.7, b.h, 0.018);
+  }
+  // what's already come down, lying round the base
+  const petals = plant.flowers.some((f) => f.petals) ? 0.3 : 0, shade = [];
+  const items = Array.from({ length: LITTER.count }, () => {
+    const az = rng() * TAU, d = 0.04 + rng() ** 1.5 * LITTER.spread, isPetal = rng() < petals;
+    shade.push(rng(), isPetal ? 1 : 0);
+    return { p: new V3(Math.cos(az) * d, 0.004 + rng() * 0.006, Math.sin(az) * d), q: new THREE.Quaternion().setFromEuler(new THREE.Euler((rng() - 0.5) * 0.12, rng() * TAU, (rng() - 0.5) * 0.12, 'YXZ')),
+      L: R(rng, ...LITTER.L) * (isPetal ? 0.65 : 1), on: 0.1 + rng() * 0.9 };
+  });
+  const geo = plant.keep(LITTER_GEO.clone());
+  geo.setAttribute('aL', new THREE.InstancedBufferAttribute(new Float32Array(shade), 2));
+  const mesh = plant.keep(new THREE.InstancedMesh(geo, LITTER_MAT, LITTER.count));
+  mesh.frustumCulled = false; mesh.raycast = () => {};
+  plant.group.add(mesh);
+  plant.litter = { mesh, items };
 }
 function buildFlowering(seed, P) {   // buttercup, alien
   const rng = mulberry32(seed), r = (a, b) => R(rng, a, b);
@@ -1046,6 +1209,471 @@ function buildFlowering(seed, P) {   // buttercup, alien
     plant.flowers.push(flower);
     flower.stem = stem;
     stem.addAttach({ f: 1, obj: flower.group, twist: rng() * TAU, flower });
+  });
+  return plant;
+}
+
+// ───────────────────────── rosehip: thin, thorny, zigzagging canes in autumn. Red hips with a dark dried crown at the
+// branch tips, and sprays of small yellow and orange leaves
+const ROSE_LEAF_MATS = [MAT.leaf, ...SPECIES.rosehip.leafTints.map(([a, b]) =>
+  shaderMat({ uBase: { value: raw(a) }, uTip: { value: raw(b) }, ...ROT_U }, ROT_VS, LEAF_FS, { side: THREE.DoubleSide }))];
+const HIP_DARK_MAT = shaderMat({ uC: U.center }, UV_VS, `uniform vec3 uC; void main() { gl_FragColor = vec4(uC, 1.0); ${GRAIN_F} }`, { side: THREE.DoubleSide });
+const HIP_FS = `uniform vec3 uBase; uniform vec3 uTip; uniform float uRipe; uniform float uDecay; uniform vec3 uRotLight; uniform vec3 uRotDark; varying vec2 vUv;
+void main() {
+  vec3 c = mix(uBase, uTip, uRipe) * mix(1.06, 0.78, smoothstep(0.15, 0.95, vUv.y));   // darkens toward the crown
+  c = mix(c, mix(uRotLight, uRotDark, smoothstep(0.35, 1.0, uDecay)), smoothstep(0.0, 1.0, uDecay) * 0.9);
+  gl_FragColor = vec4(c, 1.0);
+  ${GRAIN_F}
+}`;
+const HIP_H = 0.1, HIP_R = 0.042;
+const HIP_GEO = (() => {   // an urn: round body, narrowing to a little neck under the crown
+  const pts = [];
+  for (let i = 0; i <= 28; i++) {
+    const t = i / 28;
+    pts.push(new THREE.Vector2(Math.max(1e-4, HIP_R * Math.sin(Math.PI * t ** 0.85) ** 0.75 + HIP_R * 0.24 * smooth(0.72, 1, t)), HIP_H * t));
+  }
+  return new THREE.LatheGeometry(pts, 36);
+})();
+// stands in for a Flower: same bloom spring and clicks, but "open" means ripe (0 = a small unripe hip, 1 = plump and red)
+class Hip {
+  constructor(plant, rng, size, ripe) {
+    this.group = new THREE.Group();
+    this.b = 0; this.bv = 0; this.target = 0; this.finalBloom = ripe; this.opened = false;
+    this.L = HIP_H * size; this.perch = HIP_H * size * 1.05;
+    this.mat = plant.keep(shaderMat({ uBase: U.petalBase, uTip: U.petalTip, uRipe: { value: 0 }, uDecay: { value: 0 }, ...ROT_U }, UV_VS, HIP_FS, { side: THREE.DoubleSide }));
+    this.body = new THREE.Group();
+    this.body.add(new THREE.Mesh(HIP_GEO, this.mat));
+    const sepal = plant.keep(sheetGeo({ L: 0.052, W: 0.011, profile: SEPAL, round: true, cupV: 0.4, droop: 0.28, segU: 10, segV: 4 }));
+    const count = 5, spin = rng() * TAU;
+    for (let k = 0; k < count; k++) {   // the dried crown
+      const ph = new THREE.Group(), m = new THREE.Mesh(sepal, HIP_DARK_MAT);
+      ph.position.y = HIP_H * 0.97; ph.rotation.y = spin + k / count * TAU + (rng() - 0.5) * 0.3;
+      m.rotation.x = -R(rng, 0.5, 1.15); m.scale.setScalar(R(rng, 0.75, 1.15));
+      ph.add(m); this.body.add(ph);
+    }
+    this.body.scale.setScalar(size);
+    this.group.add(this.body);
+    this.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    this.setBloom(0);
+  }
+  setBloom(b) {
+    this.mat.uniforms.uRipe.value = smooth(0.1, 0.9, b);
+    const s = lerp(0.5, 1, clamp01(b)) * (1 + 0.15 * (b - clamp01(b))) * lerp(1, 0.74, this.mat.uniforms.uDecay.value);   // (overshoot: a little plumper for a moment; rot shrivels it)
+    this.body.scale.setScalar(Math.max(1e-4, this.L / HIP_H * s));
+  }
+  bloomTo(v) { this.opened = true; this.target = v; this.finalBloom = v; }
+  seedRot(plant, rng) { this.rotOn = rng() * 0.5; }
+  setRot(v) { this.mat.uniforms.uDecay.value = clamp01((v - this.rotOn) / 0.5); }
+  update(dt, popX) {
+    if (!this.opened && popX > 0.65) { this.opened = true; this.target = this.finalBloom; }
+    this.bv += (this.target - this.b) * BLOOM_K * 0.4 * dt;   // a slower swell than a petal opening
+    this.bv *= Math.exp(-BLOOM_D * dt);
+    this.b += this.bv * dt;
+    this.setBloom(this.b);
+  }
+}
+// a spray of small oval leaflets fanning out from one side of a node (tangent frame: +Y = along the stem)
+function makeRoseSpray(plant, rng, scale = 1) {
+  const g = new THREE.Group(), n = 3 + Math.floor(rng() * 3), az0 = rng() * TAU, gap = R(rng, 0.6, 0.85);
+  const tint = ROSE_LEAF_MATS[Math.floor(rng() * ROSE_LEAF_MATS.length)];
+  for (let i = 0; i < n; i++) {
+    const side = i - (n - 1) / 2, az = az0 + side * gap, el = R(rng, 0.45, 0.9) - Math.abs(side) * 0.12;
+    const d = new V3(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az));
+    const L = R(rng, 0.11, 0.17) * scale * (1.1 - 0.13 * Math.abs(side));
+    const mat = rng() < 0.2 ? ROSE_LEAF_MATS[Math.floor(rng() * ROSE_LEAF_MATS.length)] : tint;   // the odd one has turned further
+    const leaf = makeLeaflet(plant, rng, L, R(rng, 0.05, 0.22), mat);
+    orient(leaf, d, UP);
+    g.add(leaf);
+  }
+  return g;
+}
+function buildRosehip(seed, P) {
+  const rng = mulberry32(seed), r = (a, b) => R(rng, a, b);
+  const plant = new Plant(seed), MAX_STEMS = 30;
+  // a line that zigzags at each node, the way rose wood does, wanders in slow curves, and bends toward `pull`
+  const zigzag = (from, dir, len, pull, kink, n) => {
+    const pts = [from.clone()], d = dir.clone().normalize(), side = new V3().crossVectors(d, UP);
+    if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
+    side.normalize();
+    const other = new V3().crossVectors(d, side).normalize(), ph = rng() * TAU, ph2 = rng() * TAU, fq = r(0.7, 1.3);
+    for (let k = 1; k <= n; k++) {
+      const u = k / n * TAU * fq;
+      d.addScaledVector(pull, 1 / n)
+        .addScaledVector(side, (k % 2 ? 1 : -1) * kink * R(rng, 0.6, 1.4) + kink * 0.7 * Math.sin(u + ph))
+        .addScaledVector(other, kink * 0.7 * Math.sin(u * 0.8 + ph2)).normalize();
+      pts.push(pts[k - 1].clone().addScaledVector(d, len / n));
+    }
+    return pts;
+  };
+  const dress = (stem, { from = 0.35, sprays = 1 }) => {   // leaves along a stem, kept apart
+    const nodes = [];
+    for (let i = 0; i < sprays; i++) {
+      const f = r(from, 0.93);
+      if (nodes.some((q) => Math.abs(q - f) < 0.2)) continue;
+      nodes.push(f);
+      stem.addAttach({ f, obj: makeRoseSpray(plant, rng, r(0.85, 1.1)), twist: rng() * TAU });
+    }
+  };
+  const finish = (stem, chance) => {   // what's at the tip: a hip, leaves, or just bare wood
+    const q = rng();
+    if (q < chance) {
+      const hip = new Hip(plant, rng, r(0.85, 1.15), rng() < 0.82 ? 1 : r(0.3, 0.55));
+      plant.flowers.push(hip); hip.stem = stem;
+      stem.addAttach({ f: 1, obj: hip.group, twist: rng() * TAU, flower: hip });
+    } else if (q > chance + (1 - chance) * 0.3) stem.addAttach({ f: 1, obj: makeRoseSpray(plant, rng, r(0.85, 1.05)), twist: rng() * TAU });
+  };
+  const hipChance = 0.2 + 0.55 * P.bloom;
+  const nCanes = THREE.MathUtils.clamp(Math.round(P.stems + (rng() - 0.5) * 1.2), 1, 6), az0 = rng() * TAU;
+  for (let s = 0; s < nCanes; s++) {
+    const az = az0 + s / nCanes * TAU + r(-0.4, 0.4), out = new V3(Math.cos(az), 0, Math.sin(az)), br = r(0.01, 0.07);
+    const base = new V3(out.x * br, 0.015, out.z * br);
+    const H = r(2.1, 3.1) * P.height * (s === 0 ? 1 : r(0.65, 1));
+    // up and out, arching over toward the tip
+    const pts = zigzag(base, out.clone().multiplyScalar(r(0.05, 0.24)).add(UP), H, out.clone().multiplyScalar(r(0.08, 0.42)).addScaledVector(UP, -r(0, 0.22)), 0.15, 11);
+    const cane = plant.addStem({ rest: spaced(pts), r0: 0.018, r1: 0.006, delay: 0.15 + s * 0.22, growTime: GROW_TIME * H / 3, rng });
+    finish(cane, hipChance);
+    dress(cane, { from: 0.55, sprays: P.leafiness > 0.4 ? 1 : 0 });
+    // side branches, alternating up the upper part of the cane
+    const nb = 3 + Math.round(P.branching * 3 * rng() + P.branching);
+    let sideAz = rng() * TAU;
+    for (let b = 0; b < nb && plant.stems.length < MAX_STEMS; b++) {
+      const fA = lerp(0.3, 0.9, (b + r(0.2, 0.8)) / nb);
+      sideAz += 2.4 + r(-0.4, 0.4);
+      const o = cane.restAt(fA, new V3()), T = cane.restTangent(fA, new V3());
+      const sd = new V3(Math.cos(sideAz), 0, Math.sin(sideAz)); sd.addScaledVector(T, -sd.dot(T)).normalize();
+      const ang = r(0.5, 1.05), dir = T.clone().multiplyScalar(Math.cos(ang)).addScaledVector(sd, Math.sin(ang));
+      const len = r(0.32, 0.85) * (1 - fA * 0.4) * Math.sqrt(P.height);
+      const branch = plant.addStem({ rest: spaced(zigzag(o, dir, len, new V3(0, r(-0.4, 0.45), 0), 0.26, 6)), r0: 0.0085, r1: 0.0035, parent: cane, fA, growTime: GROW_TIME * 0.4, rng, collide: false });
+      finish(branch, hipChance);
+      dress(branch, { sprays: Math.round(P.leafiness * 2.2 + rng() * 0.8) });
+      // and a short twig or two off that
+      const nt = rng() < P.branching * 1.1 ? (rng() < 0.35 ? 2 : 1) : 0;
+      for (let t = 0; t < nt && plant.stems.length < MAX_STEMS; t++) {
+        const fT = r(0.35, 0.8), oT = branch.restAt(fT, new V3()), TT = branch.restTangent(fT, new V3());
+        const a2 = rng() * TAU, s2 = new V3(Math.cos(a2), r(-0.2, 0.3), Math.sin(a2)); s2.addScaledVector(TT, -s2.dot(TT)).normalize();
+        const d2 = TT.clone().multiplyScalar(0.6).addScaledVector(s2, 0.8);
+        const twig = plant.addStem({ rest: spaced(zigzag(oT, d2, r(0.12, 0.3), new V3(0, r(-0.3, 0.4), 0), 0.32, 5)), r0: 0.005, r1: 0.003, parent: branch, fA: fT, growTime: GROW_TIME * 0.25, rng, collide: false });
+        finish(twig, hipChance * 0.8);
+      }
+    }
+  }
+  return plant;
+}
+
+// ───────────────────────── queen anne's lace (wild carrot): slim stems, soft lobed leaves, and flat lacy heads ("umbels") of
+// hundreds of tiny florets on fine spokes, with one dark floret at the centre. Blow on one (click, shake, or a strong gust)
+// and the florets drift away; the bare spokes curl up into a little bird's nest, as the real thing does, then it regrows
+const LACE = {
+  radius: 0.27,           // umbel radius, at size 1
+  rays: [16, 30],         // spokes per umbel (small → large)
+  florets: [10, 14],      // florets per little cluster at a spoke's end
+  floretSize: 0.0235,
+  nest: 0.14,             // bloom value of the curled-up nest
+  regrow: [14, 26],       // seconds until a blown head grows back (click the nest to hurry it)
+  gust: 0.07,             // even a light gust stronger than this sheds a few florets…
+  shed: 70, shedMax: 18,  // …more the stronger it blows (per second, per head), up to this
+  drift: 420,             // most florets in the air at once
+  perBlow: 170,           // how many visibly fly off a fully blown head (the rest just shrink away)
+  raySegs: 6,             // straight pieces per spoke (a smooth curve when it curls into a nest)
+};
+const LACE_FLORET_GEO = (() => {   // five uneven little petals, facing +y
+  const sh = new THREE.Shape();
+  for (let i = 0; i < 30; i++) {
+    const a = i / 30 * TAU, r = 0.6 + 0.4 * Math.abs(Math.cos(2.5 * a)) ** 0.6;
+    if (i === 0) sh.moveTo(Math.cos(a) * r, Math.sin(a) * r); else sh.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  return new THREE.ShapeGeometry(sh).rotateX(-Math.PI / 2);
+})();
+const LACE_STICK_GEO = new THREE.CylinderGeometry(1, 1, 1, 4, 1, true).translate(0, 0.5, 0);   // unit stick, base at the origin
+const INST_VS = `void main() { vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0); ${BEND} }`;
+const LACE_STICK_MAT = shaderMat({ uC: U.stemTip }, INST_VS, `uniform vec3 uC; void main() { gl_FragColor = vec4(uC, 1.0); ${GRAIN_F} }`, { side: THREE.DoubleSide });
+const LACE_FLORET_VS = `attribute vec3 aC; varying vec3 vC; void main() { vC = aC; vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0); ${BEND} }`;
+const LACE_FLORET_FS = `uniform float uOpen; uniform vec3 uBud; uniform vec3 uTip; uniform vec3 uBase; uniform vec3 uCenter; uniform float uRot; uniform vec3 uRotLight; uniform vec3 uRotDark; varying vec3 vC;
+void main() {
+  vec3 c = mix(uBud, mix(mix(uTip, uBase, vC.x), uCenter, vC.y), uOpen);
+  c = mix(c, mix(uRotLight, uRotDark, vC.x), smoothstep(vC.z, vC.z + 0.2, uRot) * (1.0 - vC.y));   // rot: tan, floret by floret (vC.z = when)
+  if (!gl_FrontFacing) c *= 0.9;
+  gl_FragColor = vec4(c, 1.0);
+  ${GRAIN_F}
+}`;
+const LACE_DRIFT_MAT = shaderMat({ uC: U.petalTip }, INST_VS, `uniform vec3 uC; void main() { gl_FragColor = vec4(uC, 1.0); ${GRAIN_F} }`, { side: THREE.DoubleSide });
+const LACE_PROXY_MAT = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });   // what clicks land on
+const LACE_PROXY_GEO = new THREE.CircleGeometry(1, 20).rotateX(-Math.PI / 2);
+const _la = new V3(), _lb = new V3(), _lc = new V3(), _ld = new V3(), _lq = new THREE.Quaternion(), _lm = new THREE.Matrix4(), _ls = new V3();
+function setStick(mesh, i, A, B, r) {
+  _ld.subVectors(B, A);
+  const L = _ld.length();
+  if (L < 1e-5) _lq.identity(); else _lq.setFromUnitVectors(UP, _ld.multiplyScalar(1 / L));
+  mesh.setMatrixAt(i, _lm.compose(A, _lq, _ls.set(r, Math.max(L, 1e-5), r)));
+}
+// florets in the air: they tumble, drift on the wind and sink slowly
+const laceDrift = (() => {
+  const mesh = new THREE.InstancedMesh(LACE_FLORET_GEO, LACE_DRIFT_MAT, LACE.drift);
+  mesh.count = 0; mesh.frustumCulled = false; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);
+  const list = [], q = new THREE.Quaternion(), e = new THREE.Euler();
+  return {
+    get count() { return list.length; },
+    spawn(p, v, s) { if (list.length < LACE.drift) list.push({ p: p.clone(), v: v.clone(), s, t: 0, life: R(Math.random, 3.5, 7), ph: Math.random() * TAU, spin: R(Math.random, 1.5, 4) }); },
+    update(dt, t) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const f = list[i]; f.t += dt;
+        if (f.t >= f.life) { list[i] = list[list.length - 1]; list.pop(); continue; }
+        const g = wind.gustAt(t, f.p.x * wind.dir.x + f.p.z * wind.dir.y), w = wind.now * (0.22 + 0.7 * g), k = 1 - Math.exp(-1.6 * dt);
+        f.v.x += (wind.dir.x * w - f.v.x) * k; f.v.z += (wind.dir.y * w - f.v.z) * k;
+        f.v.y += (-0.07 - f.v.y) * k;
+        f.p.addScaledVector(f.v, dt);
+        f.p.x += Math.sin(f.t * 2.3 + f.ph) * 0.03 * dt; f.p.z += Math.cos(f.t * 1.9 + f.ph) * 0.03 * dt;
+        if (f.p.y < 0.004) { f.p.y = 0.004; f.v.set(0, 0, 0); }
+      }
+      list.forEach((f, i) => {
+        q.setFromEuler(e.set(f.ph + f.t * f.spin, f.ph * 2, f.t * f.spin * 0.6));
+        mesh.setMatrixAt(i, _lm.compose(f.p, q, _ls.setScalar(Math.max(1e-4, f.s * (1 - smooth(0.7, 1, f.t / f.life))))));
+      });
+      mesh.count = list.length;
+      mesh.instanceMatrix.needsUpdate = true;
+    },
+  };
+})();
+// stands in for a Flower: same bloom spring and perch, but "bloom" opens the spokes (0 = tight bud, 1 = flat open)
+class Umbel {
+  constructor(plant, rng, size, bloom) {
+    this.group = new THREE.Group(); this.inner = new THREE.Group(); this.group.add(this.inner);
+    this.size = size; this.R = LACE.radius * size;
+    this.L = this.R * 0.85; this.perch = this.R * 0.72;
+    this.b = 0; this.bv = 0; this.target = 0; this.finalBloom = bloom; this.opened = false;
+    this.clock = 0; this.regrowAt = 0; this.shed = 0; this.ph = rng() * TAU; this.active = []; this.dirty = true;
+    const N = Math.round(lerp(LACE.rays[0], LACE.rays[1], clamp01((size - 0.65) / 0.55)));
+    this.rays = []; this.florets = [];
+    const shades = [0, 0.45, 1], colour = [];   // each floret: how far from petalTip to petalBase, and whether it's the dark one
+    for (let i = 0; i < N; i++) {
+      const rho = Math.sqrt((i + 0.6) / N), az = i * 2.39996 + rng() * 0.2;
+      const ray = { rho, az, E: new V3() };
+      this.rays.push(ray);
+      const n = Math.round(R(rng, LACE.florets[0], LACE.florets[1]) * (0.8 + 0.3 * rho)), ur = this.R * 0.155 * (0.75 + 0.45 * rho);
+      for (let j = 0; j < n; j++) {
+        const d = Math.sqrt((j + 0.3) / n), a = j * 2.39996 + rng() * 6;
+        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((rng() - 0.5) * 0.5, rng() * TAU, (rng() - 0.5) * 0.5));
+        // the outer florets of the outer clusters are the biggest, as on the real flower
+        this.florets.push({ ray, x: Math.cos(a) * d * ur, y: -0.3 * d * d * ur, z: Math.sin(a) * d * ur, q, a: 1, want: 1, wait: 0, flies: false, back: 0, rho,
+          s: LACE.floretSize * size ** 0.5 * (0.8 + 0.5 * d * rho) * R(rng, 0.85, 1.15) });
+        colour.push(shades[Math.floor(rng() * shades.length)], 0, 0);
+      }
+    }
+    // the one dark floret in the middle
+    this.florets.push({ ray: null, x: 0, y: 0, z: 0, q: new THREE.Quaternion(), a: 1, want: 1, wait: 0, flies: false, back: 0, rho: 0, s: LACE.floretSize * size ** 0.5 * 0.85 });
+    colour.push(0, 1, 0);
+    const geo = plant.keep(LACE_FLORET_GEO.clone());
+    geo.setAttribute('aC', new THREE.InstancedBufferAttribute(new Float32Array(colour), 3));
+    this.mat = plant.keep(shaderMat({ uOpen: { value: 0 }, uBud: U.leafTip, uTip: U.petalTip, uBase: U.petalBase, uCenter: U.center, ...ROT_U }, LACE_FLORET_VS, LACE_FLORET_FS, { side: THREE.DoubleSide }));
+    this.flowersMesh = plant.keep(new THREE.InstancedMesh(geo, this.mat, this.florets.length));
+    // sticks: a few per spoke (a curve), 1 per floret stalk, and the thread-like forked bracts under the head
+    const nBr = 7, nSticks = N * LACE.raySegs + this.florets.length + nBr * 3;
+    this.sticks = plant.keep(new THREE.InstancedMesh(LACE_STICK_GEO, LACE_STICK_MAT, nSticks));
+    for (const m of [this.flowersMesh, this.sticks]) { m.frustumCulled = false; m.castShadow = true; m.raycast = () => {}; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.inner.add(m); }
+    this.stalkBase = N * LACE.raySegs;
+    for (let i = 0, o = this.stalkBase + this.florets.length; i < nBr; i++, o += 3) {   // bracts: out and down, then forking
+      const a = i / nBr * TAU + rng(), out = new V3(Math.cos(a), 0, Math.sin(a)), l = this.R * R(rng, 0.3, 0.45), bend = out.clone().multiplyScalar(l).add(new V3(0, -l * 0.5, 0));
+      const o0 = new V3(0, 0.002, 0), sideV = new V3(-out.z, 0, out.x).multiplyScalar(l * 0.28);
+      setStick(this.sticks, o, o0, bend, 0.0011 * size);
+      const f1 = bend.clone().addScaledVector(out, l * 0.4).add(sideV).add(new V3(0, -l * 0.15, 0)), f2 = bend.clone().addScaledVector(out, l * 0.4).sub(sideV).add(new V3(0, -l * 0.15, 0));
+      setStick(this.sticks, o + 1, bend, f1, 0.0008 * size); setStick(this.sticks, o + 2, bend, f2, 0.0008 * size);
+    }
+    this.proxy = new THREE.Mesh(LACE_PROXY_GEO, LACE_PROXY_MAT);
+    this.inner.add(this.proxy);
+    this.setBloom(0);
+  }
+  placeFloret(i) {
+    const f = this.florets[i], k = clamp01(this.b), sp = lerp(0.3, 1, k), E = f.ray ? f.ray.E : _lc.set(0, this.R * (0.46 + 0.28 * k), 0);
+    _la.set(E.x + f.x * sp, E.y + f.y * sp + 0.002 * this.size, E.z + f.z * sp);
+    this.flowersMesh.setMatrixAt(i, _lm.compose(_la, f.q, _ls.setScalar(Math.max(1e-4, f.s * lerp(0.4, 1, k) * f.a * (f.keep ?? 1)))));
+    if (f.ray) setStick(this.sticks, this.stalkBase + i, f.ray.E, _lb.copy(_la), 0.0009 * this.size ** 0.5);
+    else setStick(this.sticks, this.stalkBase + i, _lb.set(0, 0, 0), _la, 0.0011 * this.size);
+    this.flowersMesh.instanceMatrix.needsUpdate = this.sticks.instanceMatrix.needsUpdate = true;
+  }
+  setBloom(b) {
+    const k = clamp01(b), R0 = this.R, stick = 0.0016 * this.size ** 0.5;
+    this.rays.forEach((ray, i) => {
+      const c = Math.cos(ray.az), s = Math.sin(ray.az), rho = ray.rho, kk = smooth(0, 1, k);
+      // closed: the ends curl in over the middle, the outer spokes highest; open: a shallow flat-topped dome
+      const ex = lerp(rho * R0 * 0.2, rho * R0, kk), ey = lerp(R0 * (0.34 + 0.3 * rho), R0 * (0.7 - 0.09 * rho * rho), kk);
+      const cx = lerp((0.2 + rho * 0.5) * R0, ex * 0.52, kk), cy = lerp(R0 * 0.2, ey * 0.5, kk);
+      ray.E.set(c * ex, ey, s * ex);
+      _lc.set(0, 0, 0);
+      for (let t = 1; t <= LACE.raySegs; t++) {
+        const u = t / LACE.raySegs, w = 2 * (1 - u) * u, x = w * cx + u * u * ex, y = w * cy + u * u * ey;
+        _lb.set(c * x, y, s * x);
+        setStick(this.sticks, i * LACE.raySegs + t - 1, _lc, _lb, stick);
+        _lc.copy(_lb);
+      }
+    });
+    for (let i = 0; i < this.florets.length; i++) this.placeFloret(i);
+    this.mat.uniforms.uOpen.value = smooth(0.25, 0.75, k);
+    this.proxy.position.y = R0 * (0.34 + 0.34 * k);
+    this.proxy.scale.setScalar(R0 * lerp(0.42, 1.08, k));
+  }
+  bloomTo(v) { this.opened = true; this.target = v; this.finalBloom = v; }
+  get blown() { return this.regrowAt > 0; }
+  seedRot(plant, rng) {   // whole clusters go together, so it looks patchy rather than evenly thinned
+    const col = this.flowersMesh.geometry.attributes.aC;
+    for (const ray of this.rays) ray.on = rng();
+    this.florets.forEach((f, i) => {
+      if (!f.ray) { f.lose = Infinity; col.setZ(i, 2); return; }
+      f.lose = 0.15 + f.ray.on * 0.75 + rng() * 0.35;
+      col.setZ(i, f.ray.on * 0.4 + rng() * 0.35);
+    });
+  }
+  setRot(v) {
+    this.florets.forEach((f, i) => {
+      const keep = 1 - smooth(f.lose - 0.04, f.lose, v);
+      if (keep !== (f.keep ?? 1)) { f.keep = keep; this.placeFloret(i); }
+    });
+  }
+  // let some of the florets go (all = the whole head), from the outside in
+  blow(frac, dir) {
+    let n = 0;
+    const all = frac >= 0.85, odds = Math.min(1, LACE.perBlow / this.florets.length);
+    this.florets.forEach((f, i) => {
+      if (f.want === 0 || (!all && Math.random() > frac)) return;
+      f.want = 0; f.wait = all ? (1 - f.rho) * 0.28 + Math.random() * 0.1 : Math.random() * 0.2; f.flies = Math.random() < odds; f.dir = dir; f.back = all ? 0 : this.clock + R(Math.random, 8, 20);
+      this.active.push(i); n++;
+    });
+    if (all) {
+      this.target = LACE.nest; this.regrowAt = this.clock + R(Math.random, ...LACE.regrow);
+      this.visitor?.shoo?.(dir.clone().setY(0).normalize());
+    }
+    return n;
+  }
+  regrow() {
+    this.regrowAt = 0; this.target = 1; this.finalBloom = 1; this.opened = true;
+    this.florets.forEach((f, i) => { if (f.want === 0 || f.a < 1) { f.want = 1; f.back = 0; f.wait = f.rho * 1.5 + Math.random() * 0.8; this.active.push(i); } });
+  }
+  tap(stem) {   // a click: an open head blows away; a nest or a bud grows
+    if (this.b > 0.6 && !this.blown) {
+      this.blow(1, camera.getWorldDirection(new V3()).add(new V3(wind.dir.x, 0.25, wind.dir.y).multiplyScalar(0.4)).normalize());
+      stem.kick(0.07); sfx.poof(1);
+    } else { this.regrow(); stem.kick(0.03); sfx.bloom(); }
+  }
+  shaken(k) {   // let go after a hard bend
+    if (this.b > 0.6 && !this.blown) { this.blow(k > 0.65 ? 1 : k, new V3(wind.dir.x, 0.3, wind.dir.y).normalize()); sfx.poof(k); }
+  }
+  letGo(f, i) {
+    if (!f.flies || (f.keep ?? 1) < 0.5) return;   // (rot already took that one)
+    const k = clamp01(this.b);
+    _la.set((f.ray ? f.ray.E.x : 0) + f.x, (f.ray ? f.ray.E.y : this.R * 0.74) + f.y, (f.ray ? f.ray.E.z : 0) + f.z);
+    this.inner.localToWorld(_la);
+    const c = f.ray ? Math.cos(f.ray.az) : 0, s = f.ray ? Math.sin(f.ray.az) : 0;
+    _lb.set(c + (Math.random() - 0.5) * 1.2, 0.1 + Math.random() * 0.9, s + (Math.random() - 0.5) * 1.2).multiplyScalar(0.18 + Math.random() * 0.42 * k).addScaledVector(f.dir ?? UP, 0.05 + Math.random() * 0.55);
+    laceDrift.spawn(_la, _lb, f.s);
+  }
+  update(dt, popX) {
+    this.clock += dt;
+    if (!this.opened && popX > 0.65) { this.opened = true; this.target = this.finalBloom; }
+    if (this.regrowAt && this.clock > this.regrowAt) this.regrow();
+    // strong gusts strip a few florets from an open head
+    const st = this.stem, g = (st?.gust ?? 0) * wind.now;
+    if (g > LACE.gust && this.b > 0.8 && !this.blown) {
+      this.shed += dt * Math.min(LACE.shedMax, (g - LACE.gust) * LACE.shed);
+      while (this.shed >= 1) {
+        this.shed -= 1;
+        const i = Math.floor(Math.random() * this.florets.length), f = this.florets[i];
+        if (f.want === 0 || !f.ray || (f.keep ?? 1) < 0.5) continue;
+        f.want = 0; f.wait = 0; f.flies = true; f.dir = _lc.set(wind.dir.x, 0.2, wind.dir.y).clone(); f.back = this.clock + R(Math.random, 10, 24);
+        this.active.push(i);
+      }
+    }
+    const prev = this.b;
+    this.bv += (this.target - this.b) * BLOOM_K * 0.32 * dt;
+    this.bv *= Math.exp(-BLOOM_D * dt);
+    this.b += this.bv * dt;
+    if (Math.abs(this.b - prev) > 1e-4) this.setBloom(this.b);
+    // florets on their way out or back
+    for (let j = this.active.length - 1; j >= 0; j--) {
+      const i = this.active[j], f = this.florets[i];
+      if (f.wait > 0) { f.wait -= dt; continue; }
+      if (f.want === 0 && f.a > 0) {
+        if (f.a === 1) this.letGo(f, i);
+        f.a = Math.max(0, f.a - dt * 11);
+      } else if (f.want === 0) {
+        if (!f.back) { this.active[j] = this.active[this.active.length - 1]; this.active.pop(); }   // gone until the head regrows
+        else if (this.clock > f.back) { f.want = 1; f.back = 0; }
+        continue;
+      } else {
+        f.a = Math.min(1, f.a + dt * 1.6);
+        if (f.a === 1) { this.active[j] = this.active[this.active.length - 1]; this.active.pop(); }
+      }
+      this.placeFloret(i);
+    }
+    // the whole head nods and trembles a little in the wind
+    this.inner.rotation.x = 0.05 * wind.now * (0.3 + (st?.gust ?? 0)) * Math.sin(this.clock * 7 + this.ph);
+    this.inner.rotation.z = 0.04 * wind.now * (0.3 + (st?.gust ?? 0)) * Math.sin(this.clock * 5.3 + this.ph * 2);
+  }
+}
+// a solid leaf like the other species', with a few soft lobes down its sides (lobes: 0 = a plain smooth leaf)
+const LACE_LEAF = { lobes: 4, depth: 0.26 };
+const laceLeafProfile = (u) => (u < 0.3 ? Math.sin(Math.PI * 0.5 * u / 0.3) ** 0.7 : lerp(1, 0.4, smooth(0.3, 1, u)))
+  * (1 - LACE_LEAF.depth * (0.5 - 0.5 * Math.cos(TAU * LACE_LEAF.lobes * u)));
+function makeLaceLeaf(plant, rng, L, d) {
+  const g = new THREE.Group(), W = L * R(rng, 0.2, 0.26), droop = R(rng, 0.15, 0.35);
+  const m = new THREE.Mesh(plant.keep(sheetGeo({ L, W, profile: laceLeafProfile, round: true, fold: 0.3, droop, segU: 44, segV: 6 })), MAT.leaf);
+  m.castShadow = true;
+  m.userData.leaf = { L, W, droop, width: (u) => W * Math.max(0, laceLeafProfile(u)) };
+  orient(m, d, UP);
+  g.add(m);
+  return g;
+}
+function buildLace(seed, P) {
+  const rng = mulberry32(seed), r = (a, b) => R(rng, a, b);
+  const plant = new Plant(seed), tips = [];
+  const nStems = THREE.MathUtils.clamp(Math.round(P.stems + (rng() - 0.5) * 1.2), 1, 6), az0 = rng() * TAU;
+  const sideLeaf = (stem, f, L) => {
+    const a = rng() * TAU, el = r(0.25, 0.7);
+    stem.addAttach({ f, obj: makeLaceLeaf(plant, rng, L, new V3(Math.cos(el) * Math.cos(a), Math.sin(el), Math.cos(el) * Math.sin(a))) });
+  };
+  for (let s = 0; s < nStems; s++) {
+    const az = az0 + s / nStems * TAU + r(-0.4, 0.4), br = r(0.01, 0.06);
+    const base = new V3(Math.cos(az) * br, 0.015, Math.sin(az) * br);
+    const H = r(2.4, 3.4) * P.height * (s === 0 ? 1 : r(0.72, 1));
+    const leanAz = az + r(-0.35, 0.35), lean = r(0.04, 0.2), wig = r(-1, 1) * 0.035 * H;
+    const leanDir = new V3(Math.cos(leanAz), 0, Math.sin(leanAz)), perp = new V3(-leanDir.z, 0, leanDir.x);
+    const ctrl = [0, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 1].map((f) =>
+      base.clone().addScaledVector(leanDir, lean * H * f ** 1.5).addScaledVector(perp, wig * Math.sin(Math.PI * f * 1.4)).add(new V3(0, H * f, 0)));
+    const stem = plant.addStem({ rest: spaced(ctrl), r0: 0.017, r1: 0.0075, delay: 0.15 + s * 0.22, growTime: GROW_TIME * H / 3, rng });
+    tips.push({ stem, size: r(1.05, 1.25) });
+    // branches from the upper part, reaching up to about the same height: the flat-topped look
+    const nb = 1 + Math.round(P.branching * r(0.4, 2.2));
+    let sideAz = rng() * TAU;
+    for (let b = 0; b < nb; b++) {
+      const fA = lerp(0.42, 0.84, (b + r(0.2, 0.8)) / nb);
+      sideAz += 2.4 + r(-0.3, 0.3);
+      const o = stem.restAt(fA, new V3()), T = stem.restTangent(fA, new V3());
+      const side = new V3(Math.cos(sideAz), 0, Math.sin(sideAz)); side.addScaledVector(T, -side.dot(T)).normalize();
+      const ang = r(0.3, 0.58), dir = T.clone().multiplyScalar(Math.cos(ang)).addScaledVector(side, Math.sin(ang));
+      const Lb = H * (1 - fA) * r(0.75, 1.05), pts = [o.clone()];
+      for (let k = 1; k <= 4; k++) pts.push(pts[k - 1].clone().addScaledVector(dir.clone().lerp(UP, k / 4 * 0.7).normalize(), Lb / 4));
+      const branch = plant.addStem({ rest: spaced(pts), r0: 0.0095, r1: 0.0055, parent: stem, fA, growTime: GROW_TIME * 0.55, rng });
+      tips.push({ stem: branch, size: r(0.7, 0.98) });
+      sideLeaf(stem, fA, r(0.2, 0.3));
+    }
+    const nl = Math.round(P.leafiness * 2.2 + rng());
+    for (let i = 0; i < nl; i++) sideLeaf(stem, r(0.12, 0.4), r(0.28, 0.42));
+  }
+  // the basal leaves, on slender stalks
+  const nBasal = Math.round(2 + P.leafiness * 3 + rng()), bAz = rng() * TAU;
+  for (let i = 0; i < nBasal; i++) {
+    const az = bAz + i * 2.39996 + r(-0.2, 0.2), h = new V3(Math.cos(az), 0, Math.sin(az)), len = r(0.22, 0.42) * Math.sqrt(P.height);
+    const b = new V3(h.x * 0.02, 0.012, h.z * 0.02);
+    const ctrl = [[0, 0], [0.1, 0.45], [0.55, 0.8], [1, 0.95]].map(([out, up]) => b.clone().addScaledVector(h, out * len).addScaledVector(UP, up * len));
+    const pet = plant.addStem({ rest: spaced(ctrl), r0: 0.0085, r1: 0.0055, delay: 0.05 + rng() * 0.6, growTime: 0.55, rng, collide: false });
+    pet.addAttach({ f: 1, obj: makeLaceLeaf(plant, rng, r(0.5, 0.8), h.clone().addScaledVector(UP, r(0.2, 0.5)).normalize()), mode: 'world' });
+  }
+  // heads: mostly open, some still tight green buds
+  const states = tips.map(() => (rng() < P.bloom * 1.2 ? 1 : r(0.15, 0.4)));
+  if (P.bloom > 0.05 && !states.includes(1)) states[0] = 1;
+  tips.forEach(({ stem, size }, i) => {
+    const u = new Umbel(plant, rng, states[i] === 1 ? size : size * 0.8, states[i]);
+    plant.flowers.push(u); u.stem = stem;
+    stem.addAttach({ f: 1, obj: u.group, twist: rng() * TAU, flower: u });
   });
   return plant;
 }
@@ -1283,7 +1911,7 @@ function rainSound() {   // a soft high patter: filtered noise that follows the 
 
 const SPLASH = ['#a9c9e2', '#ffffff', '#cfe2f0'];
 function splash(at, n) { particles.spawn(at, n, SPLASH, { spread: 0.012, up: 0.7, s: 0.016, life: 0.36, drag: 5 }); }
-const SKY_DRY = new THREE.Color(), SKY_WET = new THREE.Color('#e7ebf0');
+const DROP_ON_LIGHT = raw('#8aa3b8'), DROP_ON_DARK = raw('#e6f0f7');   // the sky stays as set in the rain; the drops just need to show against it
 const _rh = new V3();
 function updateRain(dt, t) {
   // showers come and go on their own (more often the higher the slider)
@@ -1292,7 +1920,9 @@ function updateRain(dt, t) {
   if (rain.timer <= 0) { if (rain.target > 0) rain.stop(); else if (params.rain > 0) rain.start(); else rain.timer = 5; }
   rain.level += (rain.target - rain.level) * (1 - Math.exp(-dt / 2.5));
   rain.wet += (rain.level - rain.wet) * (1 - Math.exp(-dt / (rain.level > rain.wet ? 3 : 8)));
-  SKY_DRY.set(PAL.sky); scene.background.copy(SKY_DRY).lerp(SKY_WET, smooth(0, 1, rain.level) * 0.8);
+  scene.background.set(PAL.sky);
+  const sky = U.sky.value;
+  DROP_U.uColor.value.copy(0.3 * sky.x + 0.59 * sky.y + 0.11 * sky.z > 0.78 ? DROP_ON_LIGHT : DROP_ON_DARK);
   rainSound();
   if (!current) return;
 
@@ -1666,8 +2296,8 @@ function addBite(leaf, u, side, r, t) {
   const d = leaf.userData.leaf;
   if (!leaf.userData.bites) {
     leaf.userData.bites = Array.from({ length: 6 }, () => new THREE.Vector4());
-    leaf.material = shaderMat({ uBase: U.leafBase, uTip: U.leafTip, uBites: { value: leaf.userData.bites }, uLW: { value: new THREE.Vector2(d.L, d.W) } },
-      UV_VS, LEAF_BITE_FS, { side: THREE.DoubleSide });
+    leaf.material = shaderMat({ uBase: leaf.material.uniforms.uBase, uTip: leaf.material.uniforms.uTip, ...ROT_U, uBites: { value: leaf.userData.bites }, uLW: { value: new THREE.Vector2(d.L, d.W) } },
+      ROT_VS, LEAF_BITE_FS, { side: THREE.DoubleSide });
   }
   const slots = leaf.userData.bites, free = slots.find((b) => b.z <= 0) ?? slots.reduce((a, b) => (a.w < b.w ? a : b));
   free.set(clamp01(u), side * 1.05, r, t + R(Math.random, ...NIBBLE.heal));   // w = when it starts to heal
@@ -2356,7 +2986,7 @@ function dewSpot(d, out) {
     const w = L.width(d.u) * d.lat;
     out.set(w, -L.droop * d.u * d.u * L.L + 0.3 * Math.abs(w), d.u * L.L);
   } else {   // petal: on its cupped inner face, only while the flower's open
-    if (d.flower.b < 0.6 || !d.flower.group.visible || (o.userData.grow ?? 1) < 0.99) return false;
+    if (d.flower.b < 0.6 || !d.flower.group.visible || (o.userData.grow ?? 1) < 0.99 || (o.userData.rotS ?? 1) < 0.99) return false;
     const P = o.userData.shape, w = P.W * PETAL(d.u) * d.lat;
     out.set(w, P.cupV * d.lat * d.lat * P.W * PETAL(d.u) + P.cupU * d.u * d.u * P.L, d.u * P.L);
   }
@@ -2723,6 +3353,43 @@ function updateHairs() {
   });
 }
 
+// ───────────────────────── thorns (rosehip): little hooked prickles along the wood, always visible, riding the stems as they sway
+const THORNS = { perUnit: 12, len: [0.016, 0.032] };
+const THORN_GEO = (() => {   // +y out from the stem; the point hooks back down the stem (-x)
+  const g = new THREE.ConeGeometry(0.5, 1, 5, 3, true).translate(0, 0.5, 0), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) p.setX(i, p.getX(i) - 0.45 * p.getY(i) ** 2);
+  return g;
+})();
+const THORN_MAT = instFlat(U.stemBase);
+let thornMesh = null, thornList = [];
+function buildThorns() {
+  if (thornMesh) { scene.remove(thornMesh); thornMesh.dispose(); thornMesh = null; }
+  thornList = [];
+  if (!current || SP.structure !== 'rosehip') return;
+  for (const st of current.stems) {
+    const n = Math.round(st.len * THORNS.perUnit), k = (st.r0 / 0.018) ** 0.6;   // finer on fine wood
+    for (let i = 0; i < n; i++) { const s = (0.05 + 0.9 * Math.random()) * st.len; thornList.push({ st, s, th: Math.random() * TAU, len: R(Math.random, ...THORNS.len) * k, sink: -0.5 * lerp(st.r0, st.r1, s / st.len) }); }   // root buried in the wood
+  }
+  thornMesh = new THREE.InstancedMesh(THORN_GEO, THORN_MAT, Math.max(1, thornList.length));
+  thornMesh.count = thornList.length; thornMesh.frustumCulled = false; thornMesh.castShadow = false;
+  thornMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(thornMesh);
+}
+function updateThorns() {
+  if (!thornMesh) return;
+  thornList.forEach((h, i) => {
+    const fr = stemFrame(h.st, h.s, h.th, h.sink, _hd.position);
+    _gm.makeBasis(fr.along, fr.up, _hp.crossVectors(fr.along, fr.up));
+    _hd.quaternion.setFromRotationMatrix(_gm);
+    const grown = h.st.g >= h.s / h.st.len;   // appears as the stem grows past it
+    const out = h.len - h.sink;   // (it still sticks out its full length)
+    _hd.scale.set(grown ? h.len * 0.55 : 1e-5, grown ? out : 1e-5, grown ? h.len * 0.55 : 1e-5);
+    _hd.updateMatrix();
+    thornMesh.setMatrixAt(i, _hd.matrix);
+  });
+  thornMesh.instanceMatrix.needsUpdate = true;
+}
+
 // ───────────────────────── stem crawlers (inchworms + ladybugs + flies)
 function respawnCrawlers() {   // a few on the current plant's stems
   for (const w of [...worms, ...bugs, ...flies, ...spiders]) w.dispose();
@@ -2764,13 +3431,13 @@ function lowestY(m) { m.updateMatrixWorld(); return _fb.setFromObject(m, true).m
 let fallTimer = 15;
 const fadeFs = (fs) => 'uniform float uFade;\n' + fs.replace('gl_FragColor = vec4(c, 1.0);', 'gl_FragColor = vec4(c, uFade);');
 const FALL_LEAF_FS = fadeFs(LEAF_FS), FALL_PETAL_FS = fadeFs(PETAL_FS);
-const fallMat = (petal) => shaderMat(petal ? { uBase: U.petalBase, uTip: U.petalTip, uFade: { value: 1 } } : { uBase: U.leafBase, uTip: U.leafTip, uFade: { value: 1 } },
-  UV_VS, petal ? FALL_PETAL_FS : FALL_LEAF_FS, { side: THREE.DoubleSide, transparent: true });
+const fallMat = (petal, src) => shaderMat(petal ? { uBase: U.petalBase, uTip: U.petalTip, ...ROT_U, uFade: { value: 1 } } : { uBase: src.material.uniforms.uBase, uTip: src.material.uniforms.uTip, ...ROT_U, uFade: { value: 1 } },
+  ROT_VS, petal ? FALL_PETAL_FS : FALL_LEAF_FS, { side: THREE.DoubleSide, transparent: true });
 const _fq = new THREE.Quaternion(), _fe = new THREE.Euler(0, 0, 0, 'YXZ');
 function dropOne(t) {
   if (!current || current.exit >= 0 || SP.structure === 'mint') return;   // mint's big leaves stay put
   const petals = [], leaves = [];
-  for (const f of current.flowers) if (f.petals && f.b > 0.8 && f.group.visible) for (const pm of f.petals) if ((pm.userData.grow ?? 1) > 0.99) petals.push(pm);
+  for (const f of current.flowers) if (f.petals && f.b > 0.8 && f.group.visible) for (const pm of f.petals) if ((pm.userData.grow ?? 1) > 0.99 && (pm.userData.rotS ?? 1) > 0.99) petals.push(pm);
   for (const st of current.stems) for (const a of st.attach) {
     if (a.flower || !a.shown || a.x < 0.9) continue;
     for (const lf of a.obj.children) if (lf.userData.leaf && lf.userData.leaf.L < FALL.maxLeaf && lf.scale.x > 0.99) leaves.push({ lf, st });
@@ -2780,7 +3447,7 @@ function dropOne(t) {
   if (!pick?.lf) return;
   const src = pick.lf;
   src.updateWorldMatrix(true, false);
-  const m = new THREE.Mesh(src.geometry, fallMat(petal));
+  const m = new THREE.Mesh(src.geometry, fallMat(petal, src));
   src.matrixWorld.decompose(m.position, m.quaternion, m.scale);
   m.castShadow = true;
   scene.add(m);
@@ -2827,7 +3494,7 @@ function updateFalling(dt, t) {
     r.gv += (1 - r.g) * 90 * dt; r.gv *= Math.exp(-9 * dt); r.g += r.gv * dt;
     const done = Math.abs(1 - r.g) < 0.005 && Math.abs(r.gv) < 0.01;
     const g = done ? 1 : Math.max(1e-4, r.g);
-    if (r.petal) r.obj.userData.grow = g; else r.obj.scale.setScalar(g);
+    if (r.petal) r.obj.userData.grow = g; else r.obj.scale.setScalar(Math.max(1e-4, g * (r.obj.userData.rotS ?? 1)));
     if (done) regrowing.splice(i, 1);
   }
 }
@@ -2876,9 +3543,11 @@ function regen(seed = params.seed) {
   if (current) { current.exit = 0; sfx.sink(); }
   current = buildPlant(seed, params);
   recentre();
+  current.setRot(params.rot);
   plants.push(current);
   respawnCrawlers();
   buildHairs();
+  buildThorns();
   buildDew();
   buildAnts();
   buildWebs();
@@ -2888,16 +3557,19 @@ function regen(seed = params.seed) {
 const newPlant = () => { regen(Math.floor(Math.random() * 100000)); sfx.fresh(); };
 
 // ───────────────────────── UI
-const gui = new GUI({ title: 'plant' });
+const gui = new GUI({ title: 'Flora' });
 const fp = gui.addFolder('Plant');
-fp.add(params, 'species', Object.keys(SPECIES)).onChange(setSpecies);
+fp.add(params, 'species', Object.fromEntries(Object.keys(SPECIES).filter((k) => !SPECIES[k].hidden).map((k) => [SPECIES[k].label ?? k, k]))).onChange(setSpecies);
 const seedCtl = fp.add(params, 'seed', 0, 99999, 1).onFinishChange((v) => regen(v));
 fp.add({ newPlant }, 'newPlant').name('new plant  (R)');
+fp.add({ showcase: () => showcase.start() }, 'showcase').name('showcase  (S)');
 fp.add(params, 'stems', 1, 6, 1).onFinishChange(() => regen());
 fp.add(params, 'height', 0.6, 1.4, 0.01).onFinishChange(() => regen());
 fp.add(params, 'branching', 0, 1, 0.01).onFinishChange(() => regen());
 fp.add(params, 'leafiness', 0, 1, 0.01).onFinishChange(() => regen());
 fp.add(params, 'bloom', 0, 1, 0.01).name('blooms').onFinishChange(() => regen());
+const setRot = (v) => { ROT.value = v; current?.setRot(v); };
+fp.add(params, 'rot', 0, 1, 0.01).onChange(setRot);
 const fw = gui.addFolder('Weather');
 const windCtl = fw.add(params, 'wind', 0, 1, 0.01);
 fw.add(params, 'butterflies', 0, 3, 1).onChange(syncCritters);
@@ -2920,6 +3592,8 @@ const setColour = (k, v) => { PAL[k] = v; U[k].value.copy(raw(v)); };   // (the 
 for (const k of Object.keys(PAL)) fc.addColor(PAL, k).onChange((v) => setColour(k, v));
 function setSpecies(name) {
   params.species = name; SP = SPECIES[name];
+  for (const [k, v] of Object.entries({ ...SUNSET, ...SP.palette })) setColour(k, v);
+  fc.controllersRecursive().forEach((c) => c.updateDisplay());
   regen();
 }
 
@@ -2934,7 +3608,7 @@ function toggleWind() {
   windCtl.updateDisplay();
   sfx.fresh();
 }
-const ACTIONS = { r: newPlant, m: () => setMuted(!muted), w: toggleWind, n: () => rain.toggle() };
+const ACTIONS = { r: newPlant, m: () => setMuted(!muted), w: toggleWind, n: () => rain.toggle(), s: () => showcase.start() };
 addEventListener('keydown', (e) => {
   initAudio();
   if (e.repeat || e.target.closest?.('.lil-gui')) return;
@@ -3085,7 +3759,199 @@ for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => {
   } else if (touchMode === 'pinch' || touchMode === 'busy') touchMode = 'done';   // the finger left behind doesn't start orbiting
   pinchPrev = null;
 });
+// ───────────────────────── showcase: the camera tours the plant by itself, shot after shot, until you click, tap, scroll or press a key.
+// Each shot says where the camera wants to be as it plays; a soft spring chases that, so shots glide into each other with no cuts.
+const SHOW = {
+  glide: 1.05,            // spring speed: lower = slower, longer glides between shots
+  dur: [9, 13],           // seconds per shot
+  wideEvery: 4,           // pull back to the whole plant every so many shots
+  swoop: 0.35,            // how far it draws back while travelling
+  // how often each kind of shot comes up in a round: mostly the busy parts of the plant
+  deck: { cluster: 4, flower: 2, under: 1, above: 1, below: 1, climb: 1, leaf: 1, visitor: 1 },
+  groundEvery: 2,         // the ground shot only joins every so many rounds
+  sigma: 0.3,             // how far a part counts as "nearby" when judging how busy a spot is
+};
+const _sv = new V3(), _sv2 = new V3();
+function lookFrom(pos, target) {   // a pose from a camera position and what it looks at
+  _sv.subVectors(pos, target);
+  const R = _sv.length();
+  return { target, R, theta: Math.atan2(_sv.x, _sv.z), phi: Math.acos(clamp(_sv.y / R, -1, 1)) };
+}
+const orbitPose = (target, R, theta, phi) => ({ target, R, theta, phi });
+// where the plant is busy: every flower, leaf and stretch of stem is a point with a weight (flowers count most)
+function busyMap(P) {
+  const pts = [], cands = [];
+  let top = 0.001;
+  for (const st of P.stems) {
+    top = Math.max(top, st.rest[st.rest.length - 1].y);
+    for (let i = 0, n = Math.max(2, Math.round(st.len / 0.3)); i <= n; i++) pts.push({ p: st.at(i / n, new V3()), w: 0.2 });
+  }
+  for (const f of P.flowers) { f.group.updateWorldMatrix(true, false); const c = { p: f.group.getWorldPosition(new V3()), w: f.b > 0.4 ? (f.florets ? 6 : 4) : 1.5, flower: f }; pts.push(c); cands.push(c); }
+  for (const l of P.rotLeaves ?? []) {
+    if (l.scale.x < 0.9) continue;
+    l.updateWorldMatrix(true, false);
+    const c = { p: l.localToWorld(new V3(0, 0, l.userData.leaf.L * 0.5)), w: 1, leaf: l }; pts.push(c); cands.push(c);
+  }
+  const map = { pts, top };
+  const K = 1 / (2 * SHOW.sigma * SHOW.sigma), near = (q) => {   // how busy it is round q; the ground doesn't count for much, however crowded
+    let sum = 0, cx = 0, cy = 0, cz = 0, sq = 0;
+    for (const { p, w } of pts) { const d2 = p.distanceToSquared(q), g = w * Math.exp(-d2 * K); sum += g; cx += p.x * g; cy += p.y * g; cz += p.z * g; sq += d2 * g; }
+    return { score: sum * smooth(0.1, 0.35, q.y / top), at: new V3(cx / sum, cy / sum, cz / sum), rad: Math.sqrt(sq / sum) };
+  };
+  map.near = near;
+  for (const c of cands) { const n = near(c.p); c.score = n.score; c.at = n.at; c.rad = n.rad; }
+  cands.sort((a, b) => b.score - a.score);
+  map.cands = cands;
+  map.spots = [];   // the busiest places, kept apart from one another
+  for (const c of cands) {
+    if (map.spots.length >= 8) break;
+    if (map.spots.every((q) => q.at.distanceTo(c.at) > SHOW.sigma * 1.4)) map.spots.push(c);
+  }
+  return map;
+}
+// pick from a list by score, shying away from wherever the tour has just been
+function pickBusy(list, posOf) {
+  const odds = list.map((c) => c.score ** 2 * (showcase.recent.some((r) => r.distanceTo(posOf(c)) < 0.45) ? 0.05 : 1));
+  let x = Math.random() * odds.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < list.length; i++) if ((x -= odds[i]) <= 0) return list[i];
+  return list[0];
+}
+// from which side does this target have the most going on in frame, with nothing right in front of the lens?
+function bestView(map, target, R, phis) {
+  const tan = Math.tan(camera.fov * Math.PI / 360) * Math.min(1, camera.aspect), c = new V3(), dir = new V3(), v = new V3();
+  let best = null, bestScore = -Infinity;
+  const a0 = Math.random() * TAU;
+  for (let i = 0; i < 12; i++) for (const phi of phis) {
+    const theta = a0 + i / 12 * TAU;
+    c.setFromSphericalCoords(R, phi, theta).add(target);
+    if (c.y < 0.06) continue;
+    dir.subVectors(target, c).normalize();
+    let score = 0;
+    for (const { p, w } of map.pts) {
+      v.subVectors(p, c);
+      const z = v.dot(dir);
+      if (z < 0.02) continue;
+      const lat = Math.sqrt(Math.max(0, v.lengthSq() - z * z)) / z / tan;
+      if (lat >= 1) continue;
+      if (z < R * 0.4) { if (lat < 0.6) score -= 1.5; continue; }
+      score += w * (R / z) * (1 - lat * lat);
+    }
+    if (score > bestScore) { bestScore = score; best = { theta, phi }; }
+  }
+  return best ?? { theta: a0, phi: phis[0] };
+}
+const SHOTS = {
+  wide(P, a, d) {   // the whole plant, slowly walking round it and easing in
+    const D = frameDistance(P.radius);
+    return (k) => orbitPose(P.center, D * lerp(1.02, 0.84, k), a + d * 0.7 * k, lerp(1.38, 1.2, k));
+  },
+  below(P, a, d) {   // from the ground, looking straight up the stems
+    const top = P.center.y * 2, c = P.center;
+    return (k) => lookFrom(_sv2.set(c.x + Math.sin(a + d * 0.5 * k) * P.radius * 0.28, 0.06, c.z + Math.cos(a + d * 0.5 * k) * P.radius * 0.28).clone(), new V3(c.x, lerp(0.5, 0.8, k) * top, c.z));
+  },
+  ground(P, a, d) {   // low, past the grass and whatever's lying there, looking up into the plant
+    const c = P.center, r0 = Math.max(1.3, P.radius * 0.7), map = showcase.map;
+    return (k) => lookFrom(new V3(Math.sin(a + d * 0.6 * k) * r0 * lerp(1.1, 0.9, k), 0.08, Math.cos(a + d * 0.6 * k) * r0 * lerp(1.1, 0.9, k)), new V3(c.x * 0.3, lerp(0.22, 0.42, k) * map.top, c.z * 0.3));
+  },
+  cluster(P, a, d) {   // the busiest places on the plant, drawn back just enough to take it all in
+    const map = showcase.map, s = pickBusy(map.spots, (c) => c.at);
+    if (!s) return null;
+    const asp = Math.min(1, camera.aspect), R = clamp(s.rad * 0.95 / (Math.tan(camera.fov * Math.PI / 360) * asp), 0.8, frameDistance(P.radius) * 0.4);
+    const v = bestView(map, s.at, R, [0.95, 1.2, 1.5, 1.85]);
+    return (k) => orbitPose(s.at, R * lerp(1.14, 0.92, k), v.theta + d * 0.5 * (k - 0.5), v.phi + d * 0.1 * (k - 0.5));
+  },
+  above(P, a, d) {   // down onto the flowers from high up
+    const top = P.center.y * 2, c = P.center, D = frameDistance(P.radius) * 0.52;
+    return (k) => orbitPose(new V3(c.x, top * 0.72, c.z), D, a + d * 0.9 * k, lerp(0.34, 0.56, k));
+  },
+  climb(P, a, d) {   // ride up a stem from near the ground to the top
+    const st = P.stems.filter((q) => q.collide !== false && !q.parent).sort((x, y) => y.len - x.len)[0] ?? P.stems[0];
+    const R = Math.max(1, st.len * 0.42);
+    return (k) => orbitPose(st.at(lerp(0.3, 0.97, smooth(0, 1, k)), new V3()), R, a + d * 1.1 * k, lerp(1.42, 1.2, k));
+  },
+  flower(P, a, d) {   // close on a head, a little above it
+    const map = showcase.map, fs = map.cands.filter((c) => c.flower && c.flower.b > 0.4 && c.flower.group.visible);
+    if (!fs.length) return null;
+    const c = pickBusy(fs, (q) => q.p), f = c.flower, R = Math.max(0.65, f.L * 4.2), v = bestView(map, c.p, R, [0.85, 1.1, 1.35]);
+    return (k) => { const t = f.group.getWorldPosition(new V3()); t.y += f.L * 0.2; return orbitPose(t, R * lerp(1.25, 1, k), v.theta + d * 0.5 * (k - 0.5), v.phi + d * 0.12 * (k - 0.5)); };
+  },
+  under(P, a, d) {   // beneath a head, looking up through it at the sky
+    const map = showcase.map, fs = map.cands.filter((c) => c.flower && c.flower.b > 0.4 && c.flower.group.visible && c.p.y > 1);
+    if (!fs.length) return null;
+    const c = pickBusy(fs, (q) => q.p), f = c.flower, R = Math.max(0.7, f.L * 4.2), v = bestView(map, c.p, R, [2.25, 2.0]);
+    return (k) => orbitPose(f.group.getWorldPosition(new V3()), R * lerp(1.15, 0.95, k), v.theta + d * 0.5 * (k - 0.5), v.phi);
+  },
+  leaf(P, a, d) {   // in on a leaf
+    const map = showcase.map, ls = map.cands.filter((c) => c.leaf && c.leaf.scale.x > 0.9 && c.leaf.userData.leaf.L > 0.14 && c.p.y > map.top * 0.2);   // (sorted busiest first)
+    if (!ls.length) return null;
+    const c = pickBusy(ls.slice(0, Math.ceil(ls.length / 3)), (q) => q.p), l = c.leaf, L = l.userData.leaf.L, R = Math.max(0.65, L * 2.8), v = bestView(map, c.p, R, [0.9, 1.15, 1.4]);
+    return (k) => { l.updateWorldMatrix(true, false); return orbitPose(l.localToWorld(new V3(0, 0, L * 0.55)), R * lerp(1.2, 1, k), v.theta + d * 0.5 * (k - 0.5), v.phi); };
+  },
+  visitor(P, a, d) {   // whoever's about: a ladybird or an inchworm going about its day
+    const map = showcase.map, vs = [...bugs, ...worms].filter((q) => q.group.parent)
+      .map((q) => ({ q, score: map.near(q.group.getWorldPosition(new V3())).score })).sort((x, y) => y.score - x.score);
+    if (!vs[0] || vs[0].score <= 0) return null;
+    const v = vs[Math.floor(Math.random() * Math.ceil(vs.length / 2))].q;   // one of those in the busier half of the plant
+    return (k) => orbitPose(v.group.getWorldPosition(new V3()), lerp(0.7, 0.52, k), a + d * 0.5 * k, 1.2);
+  },
+};
+const showcase = {
+  on: false, x: null, v: null, shot: null, t: 0, dur: 0, deck: [], count: 0,
+  start() {
+    if (this.on || !current) return;
+    this.on = true; this.count = 0; this.deck = []; this.shot = null; this.round = 0; this.recent = []; this.map = busyMap(current);
+    gui.hide(); endHold();
+    follow = false; fitDist = 0; zoomQ.log = 0; orbitV.az = orbitV.pol = 0;
+    // pick up from wherever the camera is now
+    const p = lookFrom(camera.position, controls.target.clone());
+    this.x = { x: p.target.x, y: p.target.y, z: p.target.z, log: Math.log(p.R), theta: p.theta, phi: p.phi };
+    this.v = { x: 0, y: 0, z: 0, log: 0, theta: 0, phi: 0 };
+  },
+  stop() {   // the camera stays where it is; you carry on from there
+    if (!this.on) return;
+    this.on = false; gui.show();
+  },
+  next() {
+    if (!this.count || this.count % SHOW.wideEvery === 0) this.pick('wide');
+    else {
+      if (!this.deck.length) {   // a full round in a new order before any repeats
+        this.deck = Object.entries(SHOW.deck).flatMap(([n, times]) => Array(times).fill(n));
+        if (++this.round % SHOW.groundEvery === 0) this.deck.push('ground');
+        for (let i = this.deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]]; }
+      }
+      this.pick(this.deck.pop());
+    }
+    this.count++;
+  },
+  pick(name) {
+    const a = this.x.theta + R(Math.random, 0.5, 2.4) * (Math.random() < 0.5 ? -1 : 1);   // come at it from somewhere new, not back across the plant
+    const fn = SHOTS[name](current, a, Math.random() < 0.5 ? -1 : 1);
+    if (!fn) return this.next();   // nothing to see for that one (no open flower, say)
+    this.shot = fn; this.t = 0; this.dur = R(Math.random, ...SHOW.dur); this.name = name;
+    this.recent.push(fn(0.5).target.clone());
+    if (this.recent.length > 3) this.recent.shift();
+  },
+  update(dt) {
+    if (!this.shot || this.t >= this.dur) this.next();
+    this.t += dt;
+    const g = this.shot(clamp01(this.t / this.dur)), w = SHOW.glide, x = this.x, v = this.v;
+    let dTheta = (g.theta - x.theta) % TAU;   // the short way round
+    if (dTheta > Math.PI) dTheta -= TAU; else if (dTheta < -Math.PI) dTheta += TAU;
+    const far = Math.hypot(g.target.x - x.x, g.target.y - x.y, g.target.z - x.z);   // a long way to the next shot: draw back on the way, so it swoops rather than whips
+    const err = { x: g.target.x - x.x, y: g.target.y - x.y, z: g.target.z - x.z, log: Math.log(g.R) + SHOW.swoop * Math.min(far, 2.5) - x.log, theta: dTheta, phi: g.phi - x.phi };
+    for (const q in err) { v[q] += (w * w * err[q] - 2 * w * v[q]) * dt; x[q] += v[q] * dt; }
+    controls.target.set(x.x, x.y, x.z);
+    camera.position.setFromSphericalCoords(Math.exp(x.log), clamp(x.phi, 0.05, Math.PI - 0.05), x.theta).add(controls.target);
+  },
+};
+// the first click, tap, scroll or key just hands the camera back (it doesn't also bend the plant)
+for (const ev of ['pointerdown', 'wheel', 'keydown']) addEventListener(ev, (e) => {
+  if (!showcase.on || e.repeat) return;
+  showcase.stop();
+  e.stopImmediatePropagation();
+}, { capture: true, passive: true });
 function updateCamera(dt) {
+  if (showcase.on) { showcase.update(dt); return; }
   if (zoomQ.log) {
     const step = zoomQ.log * (1 - Math.exp(-ZOOM.ease * dt));
     zoomQ.log = Math.abs(zoomQ.log - step) < 1e-4 ? 0 : zoomQ.log - step;
@@ -3183,6 +4049,7 @@ function release() {
     return;
   }
   sfx.boing(k);
+  if (flower?.shaken && k > 0.25) flower.shaken(k);
   if (flower && k > 0.25 && flower.b > 0.4) poof(stem.at(1, new V3()).add(new V3(0, 0.01, 0)), 0.4 + 0.8 * k);   // shaken: out puffs the pollen
   canvas.style.cursor = '';
   grab = null;
@@ -3190,6 +4057,7 @@ function release() {
 for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => { if (grab && e.pointerId === grab.id) release(); });
 const CLICK_SLOP = 6;   // px a press may wander and still count as a click
 function toggleBloom(flower, stem) {   // a bud (or half-open flower) opens; an open flower closes back to a bud
+  if (flower.tap) { flower.tap(stem); return; }   // (some heads do their own thing)
   const opening = flower.target < 0.75;
   flower.bloomTo(opening ? 1 : 0);
   stem.kick(0.04);
@@ -3287,7 +4155,7 @@ resize();
 // ───────────────────────── go
 regen(params.seed);
 syncCritters();
-window.plantDebug = { get plant() { return current; }, regen, params, camera, controls, camTarget, critters, worms, bugs, flies, spiders, wind, rain, fallen, dropNow: () => dropOne(time), get dews() { return dews; }, fallingDrops, get ants() { return ants; }, get webs() { return webs; }, poof, DOF };
+window.plantDebug = { get plant() { return current; }, showcase, SHOTS, regen, setRot: (v) => { params.rot = v; setRot(v); gui.controllersRecursive().forEach((c) => c.updateDisplay()); }, params, camera, controls, camTarget, critters, worms, bugs, flies, spiders, wind, rain, fallen, dropNow: () => dropOne(time), get dews() { return dews; }, fallingDrops, get ants() { return ants; }, get webs() { return webs; }, poof, DOF, laceDrift, get thorns() { return { mesh: thornMesh, list: thornList }; } };
 
 const clock = new THREE.Clock();
 let time = 0;
@@ -3304,6 +4172,10 @@ function frame() {
   wind.update(dt, time);
   windSound(time);
   windSpecks(dt, time);
+  updateRain(dt, time);
+  // the plant moves first: everything riding on it (thorns, hairs, webs, crawlers) then reads where it is this frame
+  for (const p of plants) p.update(dt, time);
+  plants = plants.filter((p) => !p.dead);
   updateCritters(dt, time);
   updateCrawlers(dt, time);
   updateFalling(dt, time);
@@ -3312,13 +4184,12 @@ function frame() {
   updateAnts(dt, time);
   updateWebs(dt);
   updateHairs();
-  updateRain(dt, time);
+  updateThorns();
   ambience(dt);
   critterSounds(dt, time);
-  for (const p of plants) p.update(dt, time);
-  plants = plants.filter((p) => !p.dead);
   particles.update(dt);
   poofs.update(dt);
+  laceDrift.update(dt, time);
   updateCamera(dt);
   // keep the plant centred: slide target (and camera with it) toward the plant's middle
   if (follow) {
