@@ -3694,7 +3694,7 @@ const newPlant = () => { regen(Math.floor(Math.random() * 100000)); sfx.fresh();
 // ───────────────────────── UI
 const gui = new GUI({ title: 'Flora' });
 const fp = gui.addFolder('Plant');
-fp.add(params, 'species', Object.fromEntries(Object.keys(SPECIES).filter((k) => !SPECIES[k].hidden).map((k) => [SPECIES[k].label ?? k, k]))).onChange(setSpecies);
+const speciesCtl = fp.add(params, 'species', Object.fromEntries(Object.keys(SPECIES).filter((k) => !SPECIES[k].hidden).map((k) => [SPECIES[k].label ?? k, k]))).onChange(setSpecies);
 const seedCtl = fp.add(params, 'seed', 0, 99999, 1).onFinishChange((v) => regen(v));
 fp.add({ newPlant }, 'newPlant').name('new plant  (R)');
 fp.add({ showcase: () => showcase.start() }, 'showcase').name('showcase  (S)');
@@ -3737,6 +3737,7 @@ function applyPalette() {
 }
 function setSpecies(name) {
   params.species = name; SP = SPECIES[name];
+  switcher?.update();
   applyPalette();
   paletteUI.build();
   regen();
@@ -3834,8 +3835,37 @@ async function writePaletteFile(text) {
   return true;
 }
 paletteUI.build();
+if (matchMedia('(max-width: 600px), (max-height: 500px)').matches) gui.close();   // on a phone the panel starts folded, so it doesn't cover the plant
 
-// keys: R new plant, M mute, W wind on/off, N rain now / stop
+// the species switcher: a small pill at the bottom, ‹ name ›, to step through the plants (← → do the same)
+const speciesNames = Object.keys(SPECIES).filter((k) => !SPECIES[k].hidden);
+const switcher = (() => {
+  const el = document.createElement('div');
+  el.className = 'species';
+  el.innerHTML = '<button class="prev" aria-label="previous plant"></button><span class="name"></span><button class="next" aria-label="next plant"></button>';
+  document.body.appendChild(el);
+  const name = el.querySelector('.name');
+  const label = (k) => SPECIES[k].label ?? k;
+  name.textContent = label(params.species);
+  let ft = 0;
+  const step = (d) => {
+    const i = speciesNames.indexOf(params.species);
+    const k = speciesNames[(i + d + speciesNames.length) % speciesNames.length];
+    setSpecies(k); speciesCtl.updateDisplay(); sfx.fresh();
+  };
+  el.querySelector('.prev').onclick = () => step(-1);
+  el.querySelector('.next').onclick = () => step(1);
+  return {
+    el, step,
+    show(on) { el.classList.toggle('off', !on); },
+    update() {   // a quick fade as the name changes
+      name.classList.add('fade');
+      clearTimeout(ft); ft = setTimeout(() => { name.textContent = label(params.species); name.classList.remove('fade'); }, 180);
+    },
+  };
+})();
+
+// keys: R new plant, M mute, W wind on/off, N rain now / stop, ← → previous / next plant
 function setMuted(m) {
   muted = m;
   if (master) master.gain.setTargetAtTime(muted ? 0 : 0.9, ac.currentTime, 0.03);
@@ -3846,7 +3876,7 @@ function toggleWind() {
   windCtl.updateDisplay();
   sfx.fresh();
 }
-const ACTIONS = { r: newPlant, m: () => setMuted(!muted), w: toggleWind, n: () => rain.toggle(), s: () => showcase.start() };
+const ACTIONS = { arrowleft: () => switcher.step(-1), arrowright: () => switcher.step(1), r: newPlant, m: () => setMuted(!muted), w: toggleWind, n: () => rain.toggle(), s: () => showcase.start() };
 addEventListener('keydown', (e) => {
   initAudio();
   if (e.repeat || e.target.closest?.('.lil-gui')) return;
@@ -4178,7 +4208,7 @@ const showcase = {
   start() {
     if (this.on || !current) return;
     this.on = true; this.count = 0; this.deck = []; this.shot = null; this.round = 0; this.recent = []; this.map = busyMap(current);
-    gui.hide(); endHold();
+    gui.hide(); switcher.show(false); endHold();
     follow = false; fitDist = 0; zoomQ.log = 0; swipeQ.az = 0; orbitV.az = orbitV.pol = 0;
     // pick up from wherever the camera is now
     const p = lookFrom(camera.position, controls.target.clone());
@@ -4188,7 +4218,7 @@ const showcase = {
   },
   stop() {   // the camera drifts to a gentle halt where it is; you carry on from there
     if (!this.on) return;
-    this.on = false; gui.show();
+    this.on = false; gui.show(); switcher.show(true);
     const v = this.v;
     coast.v.set(v.x, v.y, v.z); coast.log = v.log;
     orbitV.az = v.theta; orbitV.pol = v.phi;

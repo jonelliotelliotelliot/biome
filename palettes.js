@@ -1,6 +1,6 @@
 // Flora colour palettes, written from the Colours panel (one set of swatches per name, for each plant)
 window.FLORA_PALETTES = {
-  "savedAt": 1794798703289,
+  "savedAt": 1794884346349,
   "species": {
     "buttercup": {
       "current": "buttercup-alt",
@@ -128,7 +128,7 @@ window.FLORA_PALETTES = {
       }
     },
     "lace": {
-      "current": "lace-alt",
+      "current": "lace-alt2",
       "palettes": {
         "default": {
           "petalTip": "#f3edd9",
@@ -170,6 +170,28 @@ window.FLORA_PALETTES = {
           "beetle": "#18a060",
           "butterfly1": "#4d4d4d",
           "butterfly2": "#10819e",
+          "inchworm1": "#616161",
+          "inchworm2": "#a6a6a6",
+          "inchworm3": "#d6d6d6"
+        },
+        "lace-alt2": {
+          "petalTip": "#f3edd9",
+          "petalBase": "#ffbdbd",
+          "center": "#ffffff",
+          "stemBase": "#ffcb3d",
+          "stemTip": "#46c3aa",
+          "leafBase": "#ff85b6",
+          "leafTip": "#f07533",
+          "sky": "#ffffff",
+          "skyTop": "#ffffff",
+          "ground": "#ffffff",
+          "shade": "#b7a9e6",
+          "rotLight": "#95b1b7",
+          "rotDark": "#bbbd9e",
+          "ladybug": "#ffcb3d",
+          "beetle": "#18a060",
+          "butterfly1": "#ee6d6d",
+          "butterfly2": "#46c3aa",
           "inchworm1": "#616161",
           "inchworm2": "#a6a6a6",
           "inchworm3": "#d6d6d6"
